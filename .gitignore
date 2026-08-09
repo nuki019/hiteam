@@ -1,0 +1,15 @@
+# Local tooling and generated verification artifacts
+.agents/
+.codex/
+.playwright-cli/
+tmp/
+output/
+awesome-design-md/
+
+# Desktop and operating-system metadata
+*.lnk
+.DS_Store
+Thumbs.db
+
+# Local runtime output
+*.log
