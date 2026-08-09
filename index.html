@@ -1,0 +1,762 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="HiTeam 是哈工大学生竞赛组队平台的本地静态原型，覆盖招募、申请、审核、档案、消息和文件管理流程。"
+    />
+    <title>HiTeam | 哈工大学生组队平台本地原型</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#mainContent">跳到主要内容</a>
+    <div class="app-shell">
+      <aside class="side-nav" aria-label="主导航">
+        <div class="brand-block">
+          <img src="./assets/hiteam-board.svg" alt="HiTeam 原型看板" class="brand-visual" />
+          <div>
+            <p class="eyebrow">非官方原型</p>
+            <h1>HiTeam</h1>
+            <span>哈工大学生组队平台</span>
+          </div>
+        </div>
+        <nav class="nav-list">
+          <button class="nav-item active" data-view="profile" data-step="profile" type="button">完善档案</button>
+          <button class="nav-item" data-view="discover" data-step="discover" type="button">找队伍</button>
+          <button class="nav-item" data-view="messages" data-step="apply" type="button">申请进度</button>
+          <button class="nav-item" data-view="mine" data-step="review" type="button">队长审核</button>
+          <button class="nav-item" data-view="collaboration" data-step="collaborate" type="button">匹配协作</button>
+        </nav>
+        <div class="advanced-entry">
+          <button class="ghost-button stretch" id="toggleAdvanced" type="button" aria-expanded="false">高级工具</button>
+        </div>
+        <div class="session-card">
+          <span>当前身份</span>
+          <strong id="sessionName">加载中</strong>
+          <small id="sessionMeta">本地数据</small>
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" id="viewEyebrow">Workspace</p>
+            <h2 id="viewTitle">发现招募</h2>
+          </div>
+          <div class="top-actions">
+            <div class="role-switch" id="roleSwitch" aria-label="当前身份">
+              <button class="role-option active" data-role="applicant" type="button">申请者</button>
+              <button class="role-option" data-role="captain" type="button">队长</button>
+              <button class="role-option" data-role="admin" type="button">系统管理员</button>
+              <button class="role-option" data-role="creator" type="button">平台创建者</button>
+            </div>
+            <button class="ghost-button icon-button" id="toggleTheme" type="button" aria-label="切换主题" title="切换主题">深色</button>
+            <button class="primary-button" data-view-jump="publish" data-step-jump="review" type="button">发布招募</button>
+          </div>
+        </header>
+
+        <div class="mobile-tabbar" aria-label="移动端导航">
+          <button class="mobile-nav active" data-view="profile" data-step="profile" type="button">档案</button>
+          <button class="mobile-nav" data-view="discover" data-step="discover" type="button">找队伍</button>
+          <button class="mobile-nav" data-view="messages" data-step="apply" type="button">进度</button>
+          <button class="mobile-nav" data-view="mine" data-step="review" type="button">审核</button>
+          <button class="mobile-nav" data-view="collaboration" data-step="collaborate" type="button">协作</button>
+        </div>
+
+        <section class="task-guide" id="taskGuide" aria-label="组队任务向导">
+          <button class="task-step active" data-step="profile" data-view-jump="profile" type="button">
+            <span>01</span>
+            <strong>完善档案</strong>
+            <small id="profileReadiness">待检查</small>
+          </button>
+          <button class="task-step" data-step="discover" data-view-jump="discover" type="button">
+            <span>02</span>
+            <strong>找队伍</strong>
+            <small>看匹配原因</small>
+          </button>
+          <button class="task-step" data-step="apply" data-view-jump="messages" type="button">
+            <span>03</span>
+            <strong>申请沟通</strong>
+            <small id="applicationProgress">待申请</small>
+          </button>
+          <button class="task-step" data-step="review" data-view-jump="mine" type="button">
+            <span>04</span>
+            <strong>队长审核</strong>
+            <small id="captainQueue">待审 0</small>
+          </button>
+          <button class="task-step" data-step="collaborate" data-view-jump="collaboration" type="button">
+            <span>05</span>
+            <strong>匹配后协作</strong>
+            <small id="collaborationProgress">联系方式</small>
+          </button>
+        </section>
+
+        <section class="advanced-tools hidden" id="advancedTools" aria-label="高级工具">
+          <div>
+            <h3>高级工具</h3>
+            <p>管理员、备份和数据清理不属于学生主流程，仅在需要维护演示数据时打开。</p>
+          </div>
+          <div class="advanced-actions">
+            <button class="ghost-button" data-view-jump="admin" type="button">管理后台</button>
+            <button class="ghost-button" data-view-jump="files" type="button">文件与备份</button>
+            <button class="ghost-button" id="saveSnapshot" type="button" title="导出当前本地数据">导出快照</button>
+          </div>
+        </section>
+
+        <main id="mainContent">
+          <section class="view" id="view-discover" aria-labelledby="discover-title">
+            <section class="mission-brief" aria-label="本周组队态势">
+              <div class="mission-copy">
+                <p class="mission-kicker">HIT team operations</p>
+                <h3>本周竞赛组队态势</h3>
+                <p>机器人、国创和数学建模方向正在补位，最早截止时间是 07/15 21:00。</p>
+                <div class="mission-tags" aria-label="当前协作重点">
+                  <span>四校区协作</span>
+                  <span>技能缺口优先</span>
+                  <span>匹配后释放联系</span>
+                </div>
+              </div>
+              <div class="mission-board" aria-label="招募推进看板">
+                <div class="mission-lane">
+                  <span>优先补位</span>
+                  <strong>RoboMaster 视觉识别</strong>
+                  <small>4/6 人 · 需要嵌入式与电控配合</small>
+                </div>
+                <div class="mission-lane">
+                  <span>待审申请</span>
+                  <strong>国创智能校园问答</strong>
+                  <small>3/5 人 · 当前待审 2 份</small>
+                </div>
+                <div class="mission-lane accent">
+                  <span>建议动作</span>
+                  <strong>先筛选同校区 + 高重合标签</strong>
+                  <small>降低沟通成本，保留跨校区补位</small>
+                </div>
+              </div>
+            </section>
+
+            <div class="toolbar-strip">
+              <div class="metric">
+                <span>开放招募</span>
+                <strong id="metricOpen">0</strong>
+              </div>
+              <div class="metric">
+                <span>待审核申请</span>
+                <strong id="metricPending">0</strong>
+              </div>
+              <div class="metric">
+                <span>匹配成功</span>
+                <strong id="metricMatched">0</strong>
+              </div>
+              <div class="metric">
+                <span>项目类型</span>
+                <strong id="metricPrograms">0</strong>
+              </div>
+            </div>
+
+            <div class="discover-grid">
+              <form class="filter-panel" id="filterForm">
+                <label>
+                  <span>关键词</span>
+                  <input id="filterSearch" type="search" placeholder="项目、竞赛、学院、技能" />
+                </label>
+                <label>
+                  <span>校区</span>
+                  <select id="filterCampus">
+                    <option value="">全部校区</option>
+                    <option>一校区</option>
+                    <option>二校区</option>
+                    <option>深圳</option>
+                    <option>威海</option>
+                  </select>
+                </label>
+                <div class="tag-picker" id="filterTags"></div>
+                <details class="advanced-filter">
+                  <summary>高级筛选</summary>
+                <label>
+                  <span>竞赛类型</span>
+                  <select id="filterProgram">
+                    <option value="">全部类型</option>
+                    <option value="annual_project">大一年度项目</option>
+                    <option value="innovation_training">大创计划</option>
+                    <option value="general_competition">普通竞赛</option>
+                  </select>
+                </label>
+                <label>
+                  <span>学院</span>
+                  <input id="filterCollege" type="text" placeholder="如：计算学部" />
+                </label>
+                <label>
+                  <span>状态</span>
+                  <select id="filterStatus">
+                    <option value="">全部状态</option>
+                    <option value="open">招募中</option>
+                    <option value="closed">已关闭</option>
+                    <option value="expired">已截止</option>
+                  </select>
+                </label>
+                <label>
+                  <span>年级</span>
+                  <select id="filterGrade">
+                    <option value="">不限</option>
+                    <option>大一</option>
+                    <option>大二</option>
+                    <option>大三</option>
+                    <option>大四</option>
+                    <option>硕士</option>
+                    <option>博士</option>
+                  </select>
+                </label>
+                <label>
+                  <span>排序</span>
+                    <select id="filterSort">
+                    <option value="deadline">截止时间近</option>
+                    <option value="match">标签匹配高</option>
+                  </select>
+                </label>
+                <fieldset>
+                  <legend>标签逻辑</legend>
+                  <div class="segmented">
+                    <label><input type="radio" name="tagLogic" value="or" checked /> 或</label>
+                    <label><input type="radio" name="tagLogic" value="and" /> 且</label>
+                  </div>
+                </fieldset>
+                </details>
+                <button class="ghost-button stretch" id="clearFilters" type="button">清空筛选</button>
+              </form>
+
+              <div class="results-panel">
+                <div class="section-head">
+                  <div>
+                    <h3 id="discover-title">招募列表</h3>
+                    <span id="resultCount">0 条结果</span>
+                  </div>
+                  <button class="ghost-button" id="toggleDensity" type="button">紧凑视图</button>
+                </div>
+                <div class="recruitment-list" id="recruitmentList"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" id="view-publish" aria-labelledby="publish-title">
+            <div class="compose-column">
+              <div class="section-head">
+                <div>
+                  <h3 id="publish-title">发布招募</h3>
+                  <span id="draftState">草稿自动保存</span>
+                </div>
+                <div class="top-actions">
+                  <button class="ghost-button" id="loadDraft" type="button">载入最近</button>
+                  <button class="primary-button" id="newDraft" type="button">新建草稿</button>
+                </div>
+              </div>
+
+              <section class="draft-panel" aria-label="招募草稿预览">
+                <div class="section-head compact-head">
+                  <div>
+                    <h4>草稿预览</h4>
+                    <span id="draftCount">0 个草稿</span>
+                  </div>
+                </div>
+                <div class="draft-list" id="draftPreviewList"></div>
+              </section>
+
+              <form class="form-grid compose-form" id="publishForm">
+                <div class="form-stage-title wide">
+                  <span>01</span>
+                  <strong>项目身份</strong>
+                  <small>先明确项目类型和题目，再选择它准备参加的竞赛。</small>
+                </div>
+                <label>
+                  <span>项目类型 *</span>
+                  <select name="programId" id="programSelect" required>
+                    <option value="general_competition">普通竞赛</option>
+                    <option value="annual_project">大一年度项目</option>
+                    <option value="innovation_training">大创计划</option>
+                  </select>
+                </label>
+                <label class="wide project-picker">
+                  <span>项目题目 *</span>
+                  <input name="projectTitle" id="projectTitleInput" required autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="projectSuggestions" aria-expanded="false" placeholder="输入项目题目，联想已有项目或选择新增" />
+                  <input name="projectId" id="projectIdInput" type="hidden" />
+                  <input name="projectSelectionMode" id="projectSelectionMode" type="hidden" value="new" />
+                  <div class="autocomplete-menu" id="projectSuggestions" role="listbox"></div>
+                  <div class="field-hint" id="projectSelectionMeta">输入后可用上下键选择，Enter 确认。</div>
+                  <small class="field-error" data-error-for="projectTitle"></small>
+                </label>
+                <label class="wide">
+                  <span>项目简介</span>
+                  <textarea name="projectSummary" rows="3" placeholder="已有项目会自动带出；新增项目可在这里补充简介。"></textarea>
+                </label>
+                <label>
+                  <span>关联竞赛</span>
+                  <input name="competition" list="competitionDatalist" placeholder="可搜索或手动输入主要竞赛" />
+                  <small class="field-error" data-error-for="competition"></small>
+                </label>
+                <label>
+                  <span>分赛道 / 备注</span>
+                  <input name="competitionSubtitle" placeholder="如：人工智能赛道" />
+                </label>
+                <fieldset class="wide">
+                  <legend>已有竞赛关联</legend>
+                  <select name="competitionIds" multiple id="competitionSelect" class="hidden-native-select" aria-hidden="true" tabindex="-1"></select>
+                  <div class="checkbox-grid" id="competitionChecklist"></div>
+                  <small class="field-hint">项目可以关联多个竞赛，关联关系不会复制项目资料。</small>
+                </fieldset>
+                <label>
+                  <span>竞赛等级 *</span>
+                  <select name="level" required>
+                    <option>国际</option>
+                    <option selected>国家</option>
+                    <option>省</option>
+                    <option>校</option>
+                  </select>
+                </label>
+                <label>
+                  <span>校区 *</span>
+                  <select name="campus" required>
+                    <option>一校区</option>
+                    <option>二校区</option>
+                    <option>深圳</option>
+                    <option>威海</option>
+                  </select>
+                </label>
+                <label>
+                  <span>学院 *</span>
+                  <input name="college" required placeholder="计算学部" />
+                </label>
+                <div class="form-stage-title wide">
+                  <span>02</span>
+                  <strong>队伍缺口</strong>
+                  <small>明确还缺几个人、需要什么能力，减少无效申请。</small>
+                </div>
+                <div class="inline-fields">
+                  <label>
+                    <span>组队总人数 *</span>
+                    <input name="total" required min="1" type="number" value="3" />
+                    <small class="field-error" data-error-for="total"></small>
+                  </label>
+                  <label>
+                    <span>已有人数 *</span>
+                    <input name="current" required min="1" type="number" value="1" />
+                    <small class="field-error" data-error-for="current"></small>
+                  </label>
+                </div>
+                <label>
+                  <span>截止时间 *</span>
+                  <input name="deadline" required type="datetime-local" />
+                  <small class="field-error" data-error-for="deadline"></small>
+                </label>
+                <label>
+                  <span>指导老师情况 *</span>
+                  <select name="teacherStatus" required>
+                    <option>不需要</option>
+                    <option>尚未找到</option>
+                    <option>已经找好</option>
+                  </select>
+                </label>
+                <label>
+                  <span>老师姓名</span>
+                  <input name="teacherName" placeholder="可选" />
+                </label>
+                <fieldset class="range-field">
+                  <legend>年级限制</legend>
+                  <div class="grade-range-output" id="gradeRangeLabel">大一 - 博士</div>
+                  <div class="field-hint" id="programEligibilityNote">普通竞赛可自定义年级范围。</div>
+                  <div class="range-stack">
+                    <input name="gradeMin" id="gradeMin" type="range" min="0" max="5" step="1" value="0" />
+                    <input name="gradeMax" id="gradeMax" type="range" min="0" max="5" step="1" value="5" />
+                  </div>
+                  <div class="range-ticks" aria-hidden="true">
+                    <span>大一</span><span>大二</span><span>大三</span><span>大四</span><span>硕士</span><span>博士</span>
+                  </div>
+                </fieldset>
+                <fieldset class="wide">
+                  <legend>必备标签 / 技能</legend>
+                  <select name="requiredTags" multiple id="publishTagSelect" class="hidden-native-select" aria-hidden="true" tabindex="-1"></select>
+                  <div class="checkbox-grid" id="publishTagChecklist"></div>
+                  <small class="field-error" data-error-for="requiredTags"></small>
+                </fieldset>
+                <div class="form-stage-title wide">
+                  <span>03</span>
+                  <strong>说明与材料</strong>
+                  <small>用真实进度、任务分工和附件帮助申请者判断是否适合。</small>
+                </div>
+                <label class="wide">
+                  <span>团队标签简介 *</span>
+                  <textarea name="summary" required rows="4" placeholder="已有人数、技能组合、当前进度"></textarea>
+                  <small class="field-error" data-error-for="summary"></small>
+                </label>
+                <label class="wide">
+                  <span>简单要求 *</span>
+                  <textarea name="requirement" required rows="4" placeholder="时间投入、能力要求、协作方式"></textarea>
+                  <small class="field-error" data-error-for="requirement"></small>
+                </label>
+                <div class="form-stage-title wide">
+                  <span>04</span>
+                  <strong>发布确认</strong>
+                  <small>验证码和发布摘要只在最后一步出现，避免干扰前面填表。</small>
+                </div>
+                <div class="inline-fields publish-verification">
+                  <label>
+                    <span>手机验证码 *</span>
+                    <input name="smsCode" required pattern="[0-9]{4,6}" placeholder="模拟 123456" />
+                    <small class="field-error" data-error-for="smsCode"></small>
+                  </label>
+                  <label>
+                    <span>行为验证码 *</span>
+                    <input name="captcha" required placeholder="输入 HIT" />
+                    <small class="field-error" data-error-for="captcha"></small>
+                  </label>
+                </div>
+                <label class="wide">
+                  <span>附件</span>
+                  <input name="attachments" type="file" multiple />
+                </label>
+                <section class="publish-summary wide" id="publishSummary" aria-label="发布前摘要"></section>
+                <div class="form-actions wide">
+                  <button class="ghost-button" id="savePublishDraft" type="button">保存草稿</button>
+                  <button class="primary-button" type="submit">发布</button>
+                </div>
+              </form>
+              <div class="mobile-compose-actions" aria-label="移动端发布操作">
+                <button class="ghost-button" id="mobileSaveDraft" type="button">保存草稿</button>
+                <button class="primary-button" id="mobileSubmitPublish" type="button">发布</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="view active" id="view-profile" aria-labelledby="profile-title">
+            <div class="section-head">
+              <div>
+                <h3 id="profile-title">能力档案</h3>
+                <span>奖项简称、能力标签和匹配前可读的简历信息</span>
+              </div>
+              <button class="ghost-button" id="exportProfile" type="button">导出档案</button>
+            </div>
+            <div class="profile-layout">
+              <form class="form-grid" id="profileForm">
+                <label>
+                  <span>昵称 *</span>
+                  <input name="nickname" required />
+                </label>
+                <label>
+                  <span>头像文件</span>
+                  <input name="avatarFile" type="file" accept="image/*" />
+                </label>
+                <label>
+                  <span>真实姓名</span>
+                  <input name="realName" />
+                </label>
+                <label>
+                  <span>姓名展示</span>
+                  <select name="realNameVisibility">
+                    <option value="public">匹配前展示</option>
+                    <option value="matched">匹配后展示</option>
+                    <option value="private">私密</option>
+                  </select>
+                </label>
+                <label>
+                  <span>校区 *</span>
+                  <select name="campus" required>
+                    <option>一校区</option>
+                    <option>二校区</option>
+                    <option>深圳</option>
+                    <option>威海</option>
+                  </select>
+                </label>
+                <label>
+                  <span>学院 *</span>
+                  <input name="college" required />
+                </label>
+                <label>
+                  <span>专业 *</span>
+                  <input name="major" required />
+                </label>
+                <label>
+                  <span>年级 *</span>
+                  <select name="grade" required>
+                    <option>大一</option>
+                    <option>大二</option>
+                    <option>大三</option>
+                    <option>大四</option>
+                    <option>硕士</option>
+                    <option>博士</option>
+                  </select>
+                </label>
+                <label>
+                  <span>联系方式</span>
+                  <input name="contact" placeholder="微信 / QQ / 手机号" />
+                </label>
+                <label>
+                  <span>联系方式展示</span>
+                  <select name="contactVisibility">
+                    <option value="public">匹配前展示</option>
+                    <option value="matched">匹配后展示</option>
+                    <option value="private">私密</option>
+                  </select>
+                </label>
+                <label class="wide">
+                  <span>个人标签</span>
+                  <select name="tags" multiple id="profileTagSelect" class="hidden-native-select" aria-hidden="true" tabindex="-1"></select>
+                  <div class="checkbox-grid" id="profileTagChecklist"></div>
+                </label>
+                <label class="wide">
+                  <span>个人简介</span>
+                  <textarea name="bio" rows="4"></textarea>
+                </label>
+                <div class="form-actions wide">
+                  <button class="primary-button" type="submit">保存档案</button>
+                </div>
+              </form>
+
+              <aside class="profile-aside">
+                <div class="profile-read-card">
+                  <span class="eyebrow">简历预览</span>
+                  <h4>让队长先看到你能做什么</h4>
+                  <p>项目卡只展示能力标签和奖项简称，完整资料在申请审核时通过弹窗查看。</p>
+                  <button class="primary-button" id="previewOwnResume" type="button">预览我的简历</button>
+                </div>
+                <form class="award-form" id="awardForm">
+                  <label>
+                    <span>竞赛名称</span>
+                    <input name="name" required />
+                  </label>
+                  <label>
+                    <span>竞赛简称 *</span>
+                    <input name="shortName" required placeholder="如：美赛" />
+                  </label>
+                  <div class="mini-grid">
+                    <input name="year" min="2000" max="2100" type="number" placeholder="年份" />
+                    <select name="level">
+                      <option value="national">国家级</option>
+                      <option value="provincial">省级</option>
+                      <option value="school">校级</option>
+                    </select>
+                    <select name="role">
+                      <option value="captain">队长/第一负责人</option>
+                      <option value="second">第2-3核心成员</option>
+                      <option value="member">第4名及以后普通队员</option>
+                    </select>
+                    <select name="award">
+                      <option value="special">特等奖</option>
+                      <option value="first">一等奖</option>
+                      <option value="second">二等奖</option>
+                      <option value="third">三等奖</option>
+                      <option value="excellent">优秀奖/参与奖</option>
+                    </select>
+                  </div>
+                  <label class="check-row">
+                    <input name="solo" type="checkbox" />
+                    单人参赛
+                  </label>
+                  <div class="award-preview" id="awardPreview">奖项标签预览：美赛 M奖</div>
+                  <button class="ghost-button stretch" type="submit">添加竞赛履历</button>
+                </form>
+                <div class="award-list" id="awardList"></div>
+              </aside>
+            </div>
+          </section>
+
+          <section class="view" id="view-mine" aria-labelledby="mine-title">
+            <div class="section-head">
+              <div>
+                <h3 id="mine-title">我的招募与申请</h3>
+                <span>审核申请、关闭招募、互推联系方式</span>
+              </div>
+            </div>
+            <div class="split-columns">
+              <div>
+                <h4>我发布的招募</h4>
+                <div id="myRecruitments" class="stack-list"></div>
+              </div>
+              <div>
+                <h4>申请审核</h4>
+                <div id="applicationReview" class="stack-list"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" id="view-messages" aria-labelledby="messages-title">
+            <div class="section-head">
+              <div>
+                <h3 id="messages-title">申请进度中心</h3>
+                <span>待审核、已通过、已拒绝和联系方式释放状态</span>
+              </div>
+              <button class="ghost-button" id="markRead" type="button">全部已读</button>
+            </div>
+            <div class="messages-layout">
+              <div id="notificationList" class="stack-list"></div>
+              <div id="conversationList" class="stack-list"></div>
+            </div>
+          </section>
+
+          <section class="view" id="view-collaboration" aria-labelledby="collaboration-title">
+            <div class="section-head">
+              <div>
+                <h3 id="collaboration-title">匹配后协作</h3>
+                <span>只展示已通过匹配，把联系方式、第一次同步和资料补齐放到同一个工作区</span>
+              </div>
+              <button class="ghost-button" data-view-jump="files" type="button">协作资料</button>
+            </div>
+            <div class="collaboration-overview" id="collaborationStats"></div>
+            <div class="collaboration-layout">
+              <div id="collaborationList" class="stack-list"></div>
+              <aside class="collaboration-side" aria-label="协作辅助信息">
+                <section class="collab-panel">
+                  <h4>协作判断</h4>
+                  <p>联系方式只在申请通过后释放；未匹配、已拒绝和已截止队伍不会进入这个工作区。</p>
+                  <div class="decision-lines">
+                    <span>先确认联系人</span>
+                    <span>再明确分工</span>
+                    <span>最后补齐材料</span>
+                  </div>
+                </section>
+                <section class="collab-panel">
+                  <h4>本地资料</h4>
+                  <div id="collaborationFileList" class="stack-list compact"></div>
+                </section>
+              </aside>
+            </div>
+          </section>
+
+          <section class="view" id="view-admin" aria-labelledby="admin-title">
+            <div class="section-head">
+              <div>
+                <h3 id="admin-title">管理后台</h3>
+                <span>标签库、竞赛库、举报与数据统计</span>
+              </div>
+            </div>
+            <div class="admin-grid">
+              <form id="tagAdminForm" class="admin-panel">
+                <h4>标签库</h4>
+                <label>
+                  <span>新增官方标签</span>
+                  <input name="tagName" placeholder="如：强化学习" />
+                </label>
+                <button class="ghost-button stretch" type="submit">添加标签</button>
+                <div id="adminTags" class="chip-list"></div>
+              </form>
+              <form id="competitionAdminForm" class="admin-panel">
+                <h4>竞赛库</h4>
+                <label>
+                  <span>竞赛名称</span>
+                  <input name="competitionName" placeholder="如：中国机器人及人工智能大赛" />
+                </label>
+                <label>
+                  <span>默认等级</span>
+                  <select name="competitionLevel">
+                    <option>国际</option>
+                    <option selected>国家</option>
+                    <option>省</option>
+                    <option>校</option>
+                  </select>
+                </label>
+                <button class="ghost-button stretch" type="submit">添加竞赛</button>
+                <div id="adminCompetitions" class="stack-list compact"></div>
+              </form>
+              <form id="projectAdminForm" class="admin-panel">
+                <h4>项目库</h4>
+                <label>
+                  <span>项目题目</span>
+                  <input name="projectTitle" placeholder="如：校园多模态资料检索" />
+                </label>
+                <label>
+                  <span>项目类型</span>
+                  <select name="projectProgramId">
+                    <option value="annual_project">大一年度项目</option>
+                    <option value="innovation_training">大创计划</option>
+                    <option value="general_competition">普通竞赛</option>
+                  </select>
+                </label>
+                <label>
+                  <span>项目简介</span>
+                  <textarea name="projectSummary" rows="3" placeholder="项目库摘要"></textarea>
+                </label>
+                <button class="ghost-button stretch" type="submit">新增项目</button>
+                <div id="adminProjects" class="stack-list compact"></div>
+              </form>
+              <div class="admin-panel">
+                <h4>待审标签</h4>
+                <div id="customTagReview" class="stack-list compact"></div>
+              </div>
+              <div class="admin-panel">
+                <h4>数据统计</h4>
+                <div id="adminStats" class="stats-grid"></div>
+                <h4>举报处理</h4>
+                <div id="reportList" class="stack-list compact"></div>
+              </div>
+              <div class="admin-panel" id="adminRolePanel">
+                <h4>管理员任免</h4>
+                <p class="file-meta">只有平台创建者可以任免系统管理员。</p>
+                <div id="adminUsers" class="stack-list compact"></div>
+                <div id="adminAuditLog" class="stack-list compact"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" id="view-files" aria-labelledby="files-title">
+            <div class="section-head">
+              <div>
+                <h3 id="files-title">文件管理</h3>
+                <span>本地备份、恢复、附件和数据清理</span>
+              </div>
+              <button class="primary-button" id="exportAll" type="button">导出完整备份</button>
+            </div>
+            <div class="file-grid">
+              <div class="file-panel">
+                <h4>备份与恢复</h4>
+                <div class="button-row">
+                  <button class="ghost-button" id="exportData" type="button">下载 JSON</button>
+                  <label class="file-button">
+                    导入 JSON
+                    <input id="importData" type="file" accept="application/json,.json" />
+                  </label>
+                  <button class="ghost-button danger" id="clearData" type="button">清空本地数据</button>
+                  <button class="ghost-button" id="resetDemo" type="button">恢复演示数据</button>
+                </div>
+              </div>
+              <div class="file-panel">
+                <h4>附件入库</h4>
+                <label class="file-button stretch">
+                  选择附件
+                  <input id="libraryFiles" type="file" multiple />
+                </label>
+                <div class="file-meta" id="libraryFileState">未选择文件</div>
+                <label>
+                  <span>归档位置</span>
+                  <select id="fileScope">
+                    <option value="profile">个人档案</option>
+                    <option value="recruitment">招募材料</option>
+                    <option value="collaboration">协作资料</option>
+                    <option value="admin">管理资料</option>
+                  </select>
+                </label>
+                <button class="ghost-button stretch" id="storeFiles" type="button">保存到本地库</button>
+              </div>
+              <div class="file-panel wide">
+                <h4>本地文件库</h4>
+                <div class="import-preview" id="importPreview"></div>
+                <div id="fileLibrary" class="file-list"></div>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <dialog id="detailDialog">
+      <form method="dialog" class="dialog-card">
+        <button class="dialog-close" value="close" aria-label="关闭">×</button>
+        <div id="detailContent"></div>
+      </form>
+    </dialog>
+
+    <datalist id="competitionDatalist"></datalist>
+    <div class="toast-area" id="toastArea" aria-live="polite"></div>
+    <script src="./assets/app.js"></script>
+  </body>
+</html>
