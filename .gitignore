@@ -13,3 +13,12 @@ Thumbs.db
 
 # Local runtime output
 *.log
+share-site/.env
+
+# Backend runtime state
+hiteam.db
+hiteam.db-*
+
+# Python bytecode
+__pycache__/
+*.pyc

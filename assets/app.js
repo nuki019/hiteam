@@ -1,9 +1,18 @@
 (() => {
-  const STORAGE_KEY = "hiteam.v2.prototype";
-  const DRAFT_KEY = "hiteam.v2.publishDraft";
-  const CURRENT_USER_ID = "u-current";
+  const STORAGE_KEY = "hiteam.auth.v1";
+  const LEGACY_STORAGE_KEYS = ["hiteam.v2.prototype", "hiteam.v2.publishDraft"];
+  const API_BASE = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "http://127.0.0.1:8787/api" : "/api";
+  let CURRENT_USER_ID = "";
   const GRADE_OPTIONS = ["大一", "大二", "大三", "大四", "硕士", "博士"];
-  const DEFAULT_UI = { role: "applicant", taskStep: "profile", advancedOpen: false, theme: "light" };
+  const DEGREE_LABELS = { bachelor: "本科", master: "硕士", doctor: "博士" };
+  const CONTACT_LABELS = { phone: "手机", wechat: "微信", qq: "QQ", email: "邮箱" };
+  const DEFAULT_UI = {
+    role: "applicant",
+    taskStep: "profile",
+    advancedOpen: false,
+    theme: "light",
+    draftsMigrated: false,
+  };
   const ROLE_LABELS = { applicant: "申请者", captain: "队长", admin: "系统管理员", creator: "平台创建者" };
   const PROGRAMS = {
     general_competition: {
@@ -25,16 +34,20 @@
       note: "大创计划面向大二、大三；项目库是可搜索来源，可关联多个竞赛。",
     },
   };
-  const STEP_VIEW = { profile: "profile", discover: "discover", apply: "messages", review: "mine", collaborate: "collaboration" };
+  const PROGRAM_TERM_HELP = {
+    innovation_training: {
+      definition: "“大创”是“大学生创新创业训练计划”的简称。这里的“大创计划”指学校组织的创新训练、创业训练或创业实践项目，具体要求以学校通知为准。",
+    },
+  };
+  const STEP_VIEW = { profile: "profile", discover: "discover", apply: "messages", review: "mine", advanced: "admin" };
   const VIEW_STEP = {
     profile: "profile",
     discover: "discover",
     publish: "review",
     mine: "review",
     messages: "apply",
-    collaboration: "collaborate",
-    admin: "review",
-    files: "collaborate",
+    admin: "advanced",
+    files: "advanced",
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -46,34 +59,203 @@
     profile: ["Step 01", "完善档案"],
     mine: ["Step 04", "队长审核"],
     messages: ["Step 03", "申请进度中心"],
-    collaboration: ["Step 05", "匹配后协作"],
-    admin: ["Advanced", "管理后台"],
-    files: ["Advanced", "文件与备份"],
+    admin: ["00", "管理后台"],
+    files: ["00", "文件与备份"],
   };
 
   let activeDraftId = null;
-  let state = loadState();
+  let state = emptyState();
+  let appBound = false;
   let selectedFilterTags = new Set();
   let compactMode = false;
   let pendingLibraryFiles = [];
   let projectSuggestionState = { open: false, options: [], activeIndex: 0 };
   let draftSaveTimer = 0;
   let filterRenderTimer = 0;
+  let pendingAvatarDataUrl = "";
+  let avatarCropState = null;
+  let profileTagActiveIndex = 0;
+  let awardCompetitionActiveIndex = 0;
+  let profileTagMenuOpen = false;
+  let awardCompetitionMenuOpen = false;
 
   document.addEventListener("DOMContentLoaded", init);
 
-  function init() {
+  async function init() {
+    clearLegacyStorage();
+    bindAuth();
+    showAuthShell(true);
+    try {
+      const result = await apiRequest("/auth/session");
+      if (result.authenticated && result.user) {
+        startApp(result.user);
+      } else {
+        setAuthStatus("请先登录或注册账号。", "muted");
+      }
+    } catch (error) {
+      setAuthStatus(error.message || "后端暂时不可用，请先启动认证服务。", "error");
+    }
+  }
+
+  async function startApp(authUser) {
+    const user = normalizeAuthUser(authUser);
+    CURRENT_USER_ID = user.id;
+    state = loadUserState(user);
+    try {
+      await hydrateRemoteState(user);
+    } catch (error) {
+      console.warn("Failed to load backend workspace", error);
+      setAuthStatus(error.message || "业务数据暂时无法加载，将使用本地缓存。", "error");
+    }
+    if (!appBound) {
+      setDefaultDeadline();
+      bindNavigation();
+      bindFilters();
+      bindPublish();
+      bindProfile();
+      bindAwards();
+      bindAdmin();
+      bindFiles();
+      bindTermHelp();
+      bindGlobalActions();
+      $("#logoutButton")?.addEventListener("click", logout);
+      $("#mobileLogout")?.addEventListener("click", logout);
+      appBound = true;
+    }
+    showAuthShell(false);
     expireRecruitments();
-    setDefaultDeadline();
-    bindNavigation();
-    bindFilters();
-    bindPublish();
-    bindProfile();
-    bindAwards();
-    bindAdmin();
-    bindFiles();
-    bindGlobalActions();
     showView(STEP_VIEW[currentTaskStep()] || "profile", { step: currentTaskStep(), persist: false });
+  }
+
+  function bindAuth() {
+    $$("[data-auth-mode]").forEach((button) => {
+      button.addEventListener("click", () => setAuthMode(button.dataset.authMode));
+    });
+    $("#loginForm")?.addEventListener("submit", (event) => submitAuth(event, "/auth/login"));
+    $("#registerForm")?.addEventListener("submit", (event) => submitAuth(event, "/auth/register"));
+  }
+
+  function setAuthMode(mode) {
+    const register = mode === "register";
+    $("#loginForm")?.classList.toggle("hidden", register);
+    $("#registerForm")?.classList.toggle("hidden", !register);
+    $$("[data-auth-mode]").forEach((button) => {
+      const active = button.dataset.authMode === mode;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-selected", String(active));
+    });
+    setAuthStatus("", "muted");
+  }
+
+  async function submitAuth(event, endpoint) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = Object.fromEntries(new FormData(form).entries());
+    const submit = form.querySelector("[type='submit']");
+    if (submit) submit.disabled = true;
+    setAuthStatus(endpoint.includes("register") ? "正在创建账号…" : "正在登录…", "muted");
+    try {
+      const result = await apiRequest(endpoint, { method: "POST", body: JSON.stringify(data) });
+      form.reset();
+      setAuthStatus("", "muted");
+      startApp(result.user);
+    } catch (error) {
+      setAuthStatus(error.message || "操作失败，请稍后重试。", "error");
+    } finally {
+      if (submit) submit.disabled = false;
+    }
+  }
+
+  async function logout() {
+    try {
+      await apiRequest("/auth/logout", { method: "POST" });
+    } catch {
+      // The local session is cleared below even when the server is unavailable.
+    }
+    CURRENT_USER_ID = "";
+    state = emptyState();
+    showAuthShell(true);
+    setAuthMode("login");
+    setAuthStatus("已退出登录。", "muted");
+  }
+
+  function showAuthShell(show) {
+    $("#authShell")?.classList.toggle("hidden", !show);
+    $(".app-shell")?.classList.toggle("hidden", show);
+  }
+
+  function setAuthStatus(message, tone = "muted") {
+    const element = $("#authStatus");
+    if (!element) return;
+    element.textContent = message;
+    element.dataset.tone = tone;
+  }
+
+  async function apiRequest(path, options = {}) {
+    const response = await fetch(`${API_BASE}${path}`, {
+      credentials: "include",
+      ...options,
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    });
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch {
+      payload = {};
+    }
+    if (!response.ok) throw new Error(payload.error || `请求失败（${response.status}）`);
+    return payload;
+  }
+
+  function clearLegacyStorage() {
+    LEGACY_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith("hiteam.v2."))
+      .forEach((key) => localStorage.removeItem(key));
+  }
+
+  function normalizeAuthUser(user = {}) {
+    return {
+      id: String(user.id || ""),
+      account: user.account || "",
+      nickname: user.nickname || user.account || "未命名用户",
+      realName: "",
+      realNameVisibility: "private",
+      avatar: "",
+      campus: "",
+      college: "",
+      major: "",
+      grade: "",
+      gradeCohort: "",
+      degree: "bachelor",
+      contact: "",
+      contacts: [],
+      contactVisibility: "matched",
+      tags: [],
+      bio: "",
+      awards: [],
+      systemRole: user.systemRole || null,
+    };
+  }
+
+  function emptyState(user = null) {
+    return {
+      version: "3.0-auth-local",
+      ui: { ...DEFAULT_UI },
+      users: user ? [normalizeAuthUser(user)] : [],
+      tags: [],
+      competitions: [],
+      projects: [],
+      projectCompetitionLinks: [],
+      recruitments: [],
+      platform: { creatorId: null, adminIds: [], auditLog: [] },
+      drafts: [],
+      files: [],
+      messages: [],
+      conversations: [],
+      customTags: [],
+      reports: [],
+    };
   }
 
   function demoState() {
@@ -595,41 +777,62 @@
     };
   }
 
-  function loadState() {
+  function userStorageKey(userId) {
+    return `${STORAGE_KEY}.${encodeURIComponent(userId)}`;
+  }
+
+  function loadUserState(user) {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return ensureStateShape(demoState());
+      const raw = localStorage.getItem(userStorageKey(user.id));
+      if (!raw) return ensureStateShape(emptyState(user), user);
       const parsed = JSON.parse(raw);
-      if (!parsed || !Array.isArray(parsed.recruitments)) return ensureStateShape(demoState());
-      return ensureStateShape(parsed);
+      if (!parsed || !Array.isArray(parsed.recruitments)) return ensureStateShape(emptyState(user), user);
+      return ensureStateShape(parsed, user);
     } catch (error) {
       console.warn("Failed to load state", error);
-      return ensureStateShape(demoState());
+      return ensureStateShape(emptyState(user), user);
     }
   }
 
-  function ensureStateShape(nextState) {
+  function ensureStateShape(nextState, authUser = null) {
     nextState.ui = { ...DEFAULT_UI, ...(nextState.ui || {}) };
+    delete nextState.ui.collaborationMigrated;
     if (!ROLE_LABELS[nextState.ui.role]) nextState.ui.role = DEFAULT_UI.role;
+    if (authUser && ["admin", "creator"].includes(nextState.ui.role) && authUser.systemRole !== nextState.ui.role) {
+      nextState.ui.role = DEFAULT_UI.role;
+    }
     if (!STEP_VIEW[nextState.ui.taskStep]) nextState.ui.taskStep = DEFAULT_UI.taskStep;
     nextState.ui.advancedOpen = Boolean(nextState.ui.advancedOpen);
     if (!['light', 'dark'].includes(nextState.ui.theme)) nextState.ui.theme = DEFAULT_UI.theme;
     nextState.users ||= [];
+    if (authUser) {
+      const normalized = normalizeAuthUser(authUser);
+      const existing = nextState.users.find((user) => user.id === normalized.id);
+      if (existing) {
+        existing.id = normalized.id;
+        existing.account = normalized.account;
+        existing.systemRole = normalized.systemRole;
+        existing.nickname ||= normalized.nickname;
+      } else {
+        nextState.users.unshift(normalized);
+      }
+    }
     nextState.tags ||= [];
     nextState.competitions ||= [];
-    nextState.projects ||= demoState().projects || [];
-    nextState.projectCompetitionLinks ||= demoState().projectCompetitionLinks || [];
+    nextState.projects ||= [];
+    nextState.projectCompetitionLinks ||= [];
     nextState.platform = {
-      creatorId: "u-creator",
+      creatorId: null,
       adminIds: [],
       auditLog: [],
       ...(nextState.platform || {}),
     };
+    nextState.recruitments ||= [];
     nextState.drafts ||= [];
     nextState.files ||= [];
     nextState.messages ||= [];
     nextState.conversations ||= [];
-    nextState.collaboration = nextState.collaboration && typeof nextState.collaboration === "object" ? nextState.collaboration : {};
+    delete nextState.collaboration;
     nextState.customTags ||= [];
     nextState.reports ||= [];
     nextState.recruitments.forEach((item) => {
@@ -639,28 +842,17 @@
     nextState.users.forEach((user) => {
       user.tags ||= [];
       user.awards ||= [];
-      user.grade ||= "大二";
+      user.contacts = normalizeContacts(user.contacts, user.contact);
+      user.contact = contactSummary(user.contacts, user.contact);
+      user.degree ||= inferDegree(user.grade);
+      user.gradeCohort ||= inferGradeCohort(user.grade, user.degree);
+      user.grade ||= computeGrade(user.gradeCohort, user.degree) || "";
       user.systemRole ||= null;
       user.awards.forEach((award) => {
         award.shortName ||= shortNameForAward(award.name);
+        award.bonusType ||= "";
       });
     });
-    try {
-      const legacyDraft = localStorage.getItem(DRAFT_KEY);
-      if (legacyDraft && !nextState.drafts.length) {
-        nextState.drafts.push({
-          id: uid("draft"),
-          data: normalizeDraftData(JSON.parse(legacyDraft)),
-          updatedAt: new Date().toISOString(),
-        });
-      }
-    } catch {
-      localStorage.removeItem(DRAFT_KEY);
-    }
-    if (nextState.drafts.length < 2) {
-      const templates = demoState().drafts.filter((draft) => !nextState.drafts.some((item) => item.id === draft.id));
-      nextState.drafts.push(...templates.slice(0, 2 - nextState.drafts.length));
-    }
     activeDraftId = nextState.drafts[0]?.id || null;
     return nextState;
   }
@@ -676,6 +868,17 @@
 
   function programById(id) {
     return PROGRAMS[id] || PROGRAMS.general_competition;
+  }
+
+  function programLabelMarkup(program) {
+    const name = escapeHtml(program?.name || "普通竞赛");
+    const help = PROGRAM_TERM_HELP[program?.id];
+    if (!help) return name;
+    const tooltipId = `term-help-${uid("program")}`;
+    return `${name} <span class="term-help" data-term-help>
+      <button class="term-help-trigger" type="button" data-term-help-trigger aria-expanded="false" aria-label="查看大创的含义" aria-describedby="${tooltipId}">i</button>
+      <span class="term-help-popover" id="${tooltipId}" role="tooltip">${escapeHtml(help.definition)}</span>
+    </span>`;
   }
 
   function projectById(id) {
@@ -723,9 +926,133 @@
     return text.slice(0, 8) || "竞赛";
   }
 
+  function normalizeContacts(value, fallback = "") {
+    if (Array.isArray(value)) {
+      return value
+        .filter((item) => item && CONTACT_LABELS[item.type] && String(item.value || "").trim())
+        .map((item) => ({ type: item.type, value: String(item.value).trim() }));
+    }
+    const legacy = String(fallback || "").trim();
+    if (!legacy) return [];
+    const match = legacy.match(/^\s*(手机|微信|QQ|邮箱)\s*:\s*(.+)$/);
+    const type = match ? { 手机: "phone", 微信: "wechat", QQ: "qq", 邮箱: "email" }[match[1]] : "wechat";
+    return [{ type, value: match ? match[2].trim() : legacy }];
+  }
+
+  function contactSummary(contacts = [], fallback = "") {
+    if (contacts.length) return contacts.map((item) => `${CONTACT_LABELS[item.type]}: ${item.value}`).join(" / ");
+    return String(fallback || "").trim();
+  }
+
+  function currentAcademicYear() {
+    const date = new Date();
+    return date.getMonth() + 1 >= 9 ? date.getFullYear() : date.getFullYear() - 1;
+  }
+
+  function inferDegree(grade = "") {
+    const text = String(grade);
+    if (text.includes("硕") || text.includes("研")) return "master";
+    if (text.includes("博")) return "doctor";
+    return "bachelor";
+  }
+
+  function inferGradeCohort(grade = "", degree = "bachelor") {
+    const match = String(grade).match(/([1-6])/);
+    if (!match || !String(grade)) return "";
+    const current = Number(match[1]);
+    return String(currentAcademicYear() - current + 1);
+  }
+
+  function computeGrade(cohort, degree) {
+    if (!cohort || !DEGREE_LABELS[degree]) return "";
+    const level = currentAcademicYear() - Number(cohort) + 1;
+    if (!Number.isFinite(level) || level < 1 || level > 8) return "";
+    const chinese = ["", "一", "二", "三", "四", "五", "六", "七", "八"];
+    if (degree === "master") return `研${chinese[level] || level}`;
+    if (degree === "doctor") return `博${chinese[level] || level}`;
+    return level <= 4 ? `大${chinese[level] || level}` : "本科毕业年级";
+  }
+
+  function gradeMatches(actual = "", expected = "") {
+    const left = String(actual).trim();
+    const right = String(expected).trim();
+    if (!left || !right || right === "不限") return Boolean(left && right);
+    if (left === right) return true;
+    if (right === "硕士" || right === "研究生") return left.startsWith("研");
+    if (right === "博士") return left.startsWith("博");
+    if (right === "本科") return left.startsWith("大");
+    return false;
+  }
+
   function saveState() {
     state.updatedAt = new Date().toISOString();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    if (CURRENT_USER_ID) localStorage.setItem(userStorageKey(CURRENT_USER_ID), JSON.stringify(state));
+  }
+
+  async function hydrateRemoteState(authUser = currentUser()) {
+    const result = await apiRequest("/workspace");
+    const remote = result.state || {};
+    const local = state || emptyState(authUser);
+    let remoteDrafts = Array.isArray(remote.drafts) ? remote.drafts : [];
+    if (!local.ui.draftsMigrated) {
+      if (!remoteDrafts.length && local.drafts.length) {
+        for (const draft of local.drafts) {
+          await apiRequest("/drafts", {
+            method: "POST",
+            body: JSON.stringify({ id: draft.id, data: draft.data }),
+          });
+        }
+        remoteDrafts = local.drafts;
+      }
+      local.ui.draftsMigrated = true;
+    }
+    state = ensureStateShape(
+      {
+        ...remote,
+        ui: local.ui,
+        drafts: remoteDrafts,
+        files: local.files,
+        customTags: Array.isArray(remote.customTags) ? remote.customTags : local.customTags,
+        reports: local.reports,
+      },
+      authUser,
+    );
+    saveState();
+    return state;
+  }
+
+  async function refreshRemoteState() {
+    await hydrateRemoteState(currentUser());
+    renderAll();
+  }
+
+  async function persistCurrentProfile(user = currentUser()) {
+    const payload = {
+      nickname: user.nickname,
+      realName: user.realName,
+      realNameVisibility: user.realNameVisibility,
+      avatar: user.avatar,
+      campus: user.campus,
+      college: user.college,
+      major: user.major,
+      grade: user.grade,
+      gradeCohort: user.gradeCohort,
+      degree: user.degree,
+      contacts: user.contacts || [],
+      contactVisibility: user.contactVisibility,
+      tags: user.tags || [],
+      bio: user.bio,
+      awards: user.awards || [],
+    };
+    const result = await apiRequest("/profile", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    const index = state.users.findIndex((item) => item.id === CURRENT_USER_ID);
+    if (index >= 0) state.users[index] = result.profile;
+    else state.users.unshift(result.profile);
+    saveState();
+    return result.profile;
   }
 
   function expireRecruitments() {
@@ -771,6 +1098,12 @@
 
   function setRole(role) {
     if (!ROLE_LABELS[role]) return;
+    const systemRole = currentUser().systemRole;
+    const allowedAdminView = role === "admin" && systemRole === "creator";
+    if ((role === "admin" || role === "creator") && systemRole !== role && !allowedAdminView) {
+      toast("该管理身份需要后端授权", "error");
+      return;
+    }
     state.ui.role = role;
     if (role === "captain") {
       state.ui.taskStep = "review";
@@ -779,17 +1112,17 @@
       return;
     }
     if (role === "admin") {
-      state.ui.taskStep = "review";
+      state.ui.taskStep = "advanced";
       state.ui.advancedOpen = true;
       saveState();
-      showView("admin", { step: "review" });
+      showView("admin", { step: "advanced" });
       return;
     }
     if (role === "creator") {
-      state.ui.taskStep = "review";
+      state.ui.taskStep = "advanced";
       state.ui.advancedOpen = true;
       saveState();
-      showView("admin", { step: "review" });
+      showView("admin", { step: "advanced" });
       return;
     }
     state.ui.taskStep = profileReadiness(currentUser()).ready ? "discover" : "profile";
@@ -829,13 +1162,49 @@
     $$(".view").forEach((section) => section.classList.remove("active"));
     $(`#view-${view}`)?.classList.add("active");
     $$(".nav-item, .mobile-nav").forEach((button) => {
-      button.classList.toggle("active", button.dataset.step === currentTaskStep());
+      const advancedButton = button.classList.contains("advanced-nav-item");
+      const activeView = $(".view.active")?.id?.replace("view-", "");
+      button.classList.toggle("active", advancedButton ? button.dataset.view === activeView : button.dataset.step === currentTaskStep());
     });
     const [eyebrow, title] = viewMeta[view] || viewMeta.discover;
     $("#viewEyebrow").textContent = eyebrow;
     $("#viewTitle").textContent = title;
     if (view === "profile") populateProfileForm();
     renderAll();
+  }
+
+  function closeTermHelp(helper) {
+    if (!helper) return;
+    helper.dataset.open = "false";
+    helper.querySelector("[data-term-help-trigger]")?.setAttribute("aria-expanded", "false");
+  }
+
+  function closeAllTermHelp() {
+    $$('[data-term-help][data-open="true"]').forEach(closeTermHelp);
+  }
+
+  function bindTermHelp() {
+    document.addEventListener("click", (event) => {
+      const trigger = event.target.closest("[data-term-help-trigger]");
+      if (trigger) {
+        const helper = trigger.closest("[data-term-help]");
+        const open = helper?.dataset.open === "true";
+        closeAllTermHelp();
+        if (helper && !open) {
+          helper.dataset.open = "true";
+          trigger.setAttribute("aria-expanded", "true");
+        }
+        return;
+      }
+      if (!event.target.closest("[data-term-help]")) closeAllTermHelp();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      const helper = $('[data-term-help][data-open="true"]');
+      if (!helper) return;
+      closeTermHelp(helper);
+      helper.querySelector("[data-term-help-trigger]")?.focus();
+    });
   }
 
   function bindFilters() {
@@ -935,13 +1304,30 @@
         summary: recruitment.projectSummary,
         programId: recruitment.programId,
       };
-      state.recruitments.unshift(recruitment);
+      recruitment.attachments = attachments.map(({ dataUrl, ...file }) => file);
+      let published;
+      try {
+        const result = await apiRequest("/recruitments", {
+          method: "POST",
+          body: JSON.stringify(recruitment),
+        });
+        published = result.recruitment;
+      } catch (error) {
+        toast(error.message || "招募发布失败", "error");
+        return;
+      }
+      state.recruitments.unshift(published);
       state.files.push(...attachments);
-      addMessage("notification", "招募已发布", `${recruitment.competition} 已进入发现列表。`);
+      const publishedDraftId = activeDraftId;
       state.drafts = state.drafts.filter((draft) => draft.id !== activeDraftId);
       activeDraftId = state.drafts[0]?.id || null;
+      if (publishedDraftId) {
+        apiRequest(`/drafts/${encodeURIComponent(publishedDraftId)}`, { method: "DELETE" }).catch((error) => {
+          console.warn("Failed to remove published draft remotely", error);
+        });
+      }
       saveState();
-      localStorage.removeItem(DRAFT_KEY);
+      await refreshRemoteState();
       form.reset();
       setDefaultDeadline();
       updateGradeRangeLabel(form);
@@ -1170,12 +1556,18 @@
     } else {
       state.drafts.unshift({ id: activeDraftId, data, updatedAt: now });
     }
+    const draft = state.drafts.find((item) => item.id === activeDraftId);
+    if (draft) {
+      apiRequest("/drafts", {
+        method: "POST",
+        body: JSON.stringify({ id: draft.id, data: draft.data }),
+      }).catch((error) => console.warn("Failed to save draft remotely", error));
+    }
     saveState();
     $("#draftState").textContent = `草稿已保存 ${formatTime(now)}`;
     if (!silent) {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify(data));
       renderDrafts();
-      toast("草稿已保存到本地浏览器");
+      toast("草稿已保存");
     }
     renderFieldErrors({});
     renderPublishSummary(data);
@@ -1223,17 +1615,23 @@
     clearChecklist("publishTagChecklist");
     updateGradeRangeLabel(form);
     saveDraftFromForm(form, true);
+    renderDrafts();
     form.elements.competition.focus();
     toast("新草稿已创建");
   }
 
-  function deleteDraft(draftId) {
+  async function deleteDraft(draftId) {
     if (!confirm("确定删除这个草稿吗？")) return;
     state.drafts = state.drafts.filter((draft) => draft.id !== draftId);
     if (activeDraftId === draftId) activeDraftId = state.drafts[0]?.id || null;
     saveState();
     renderDrafts();
-    toast("草稿已删除");
+    try {
+      await apiRequest(`/drafts/${encodeURIComponent(draftId)}`, { method: "DELETE" });
+      toast("草稿已删除");
+    } catch (error) {
+      toast(error.message || "远端草稿删除失败", "error");
+    }
   }
 
   function bindGradeRange(form) {
@@ -1309,7 +1707,7 @@
     summary.innerHTML = `
       <h4>发布前摘要</h4>
       <div class="summary-grid">
-        <div class="summary-item"><span>项目类型</span><strong>${escapeHtml(program.name)}</strong></div>
+        <div class="summary-item"><span>项目类型</span><strong>${programLabelMarkup(program)}</strong></div>
         <div class="summary-item"><span>项目题目</span><strong>${escapeHtml(title)}</strong></div>
         <div class="summary-item"><span>关联竞赛</span><strong>${escapeHtml(linked.join("、") || data.competition || "未填写")}</strong></div>
         <div class="summary-item"><span>人数</span><strong>${escapeHtml(data.current || "0")} / ${escapeHtml(data.total || "0")}</strong></div>
@@ -1329,14 +1727,171 @@
 
   function bindProfile() {
     const form = $("#profileForm");
+    const avatarInput = $("#profileAvatarFile");
+    const cropDialog = $("#avatarCropDialog");
+    const cropCanvas = $("#avatarCropCanvas");
+    const cropZoom = $("#avatarCropZoom");
+    renderGradeCohortOptions();
+    renderContactRows(currentUser().contacts || []);
+    renderProfileTagPicker();
+    $("#realNameVisibilityToggle")?.addEventListener("change", renderNameVisibilitySwitch);
+    renderNameVisibilitySwitch();
+    $("#gradeCohort")?.addEventListener("change", updateComputedGrade);
+    $("#degree")?.addEventListener("change", updateComputedGrade);
+    $("#addContactRow")?.addEventListener("click", () => {
+      const contacts = readContactRows(true);
+      contacts.push({ type: "wechat", value: "" });
+      renderContactRows(contacts);
+      $("#contactRows .contact-row:last-child input")?.focus();
+    });
+    $("#contactRows")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-remove-contact]");
+      if (!button) return;
+      const row = button.closest(".contact-row");
+      if (!row) return;
+      if (button.dataset.confirmed !== "true") {
+        button.dataset.confirmed = "true";
+        button.classList.add("confirm-remove");
+        button.setAttribute("aria-label", "再次点击删除这一行联系方式");
+        button.title = "再次点击删除这一行联系方式";
+        return;
+      }
+      row.remove();
+      if (!$("#contactRows .contact-row")) renderContactRows([]);
+    });
+    $("#contactRows")?.addEventListener("input", () => {
+      $("#contact") && ($("#contact").value = contactSummary(readContactRows()));
+    });
+    $("#profileTagSearch")?.addEventListener("input", (event) => {
+      profileTagActiveIndex = 0;
+      profileTagMenuOpen = Boolean(normalizeSearchText(event.currentTarget.value));
+      renderProfileTagPicker(event.currentTarget.value);
+    });
+    $("#profileTagSearch")?.addEventListener("focus", (event) => {
+      if (normalizeSearchText(event.currentTarget.value)) {
+        profileTagMenuOpen = true;
+        renderProfileTagPicker(event.currentTarget.value);
+      }
+    });
+    $("#profileTagSearch")?.addEventListener("keydown", (event) => {
+      const menu = $("#profileTagSuggestions");
+      const options = $$('[data-profile-tag-option="true"]', menu);
+      if (event.key === "ArrowDown" && options.length) {
+        event.preventDefault();
+        profileTagActiveIndex = (profileTagActiveIndex + 1) % options.length;
+        renderProfileTagPicker(event.currentTarget.value);
+      } else if (event.key === "ArrowUp" && options.length) {
+        event.preventDefault();
+        profileTagActiveIndex = (profileTagActiveIndex - 1 + options.length) % options.length;
+        renderProfileTagPicker(event.currentTarget.value);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        const option = options[profileTagActiveIndex] || options[0];
+        if (option) addProfileTag(option.dataset.tagName, option.dataset.tagRequest === "true");
+      } else if (event.key === "Escape") {
+        closeProfileTagMenu();
+      }
+    });
+    $("#profileTagSuggestions")?.addEventListener("click", (event) => {
+      const option = event.target.closest('[data-profile-tag-option="true"]');
+      if (!option) return;
+      addProfileTag(option.dataset.tagName, option.dataset.tagRequest === "true");
+    });
+    $("#profileHotTags")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-hot-tag]");
+      if (button) addProfileTag(button.dataset.hotTag, false);
+    });
+    document.addEventListener("pointerdown", (event) => {
+      if (!event.target.closest("#profileTagPicker")) closeProfileTagMenu();
+      if (!event.target.closest("#awardForm .autocomplete-field")) closeAwardCompetitionMenu();
+    });
+    $("#profileSelectedTags")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-remove-profile-tag]");
+      if (!button) return;
+      const user = currentUser();
+      user.tags = (user.tags || []).filter((tag) => normalizeSearchText(tag) !== normalizeSearchText(button.dataset.removeProfileTag));
+      renderProfileTagPicker($("#profileTagSearch")?.value || "");
+    });
+    avatarInput?.addEventListener("change", async () => {
+      const file = avatarInput.files?.[0];
+      if (!file) {
+        renderProfileAvatar(currentUser());
+        return;
+      }
+      if (!file.type.startsWith("image/")) {
+        avatarInput.value = "";
+        toast("请选择图片格式的头像", "error");
+        return;
+      }
+      if (file.size > 12 * 1024 * 1024) {
+        avatarInput.value = "";
+        toast("头像文件不能超过 12 MB", "error");
+        return;
+      }
+      try {
+        await openAvatarCropper(file);
+      } catch (error) {
+        avatarInput.value = "";
+        toast(error.message || "头像读取失败，请重新选择", "error");
+      }
+    });
+    cropZoom?.addEventListener("input", () => {
+      if (!avatarCropState) return;
+      avatarCropState.zoom = Number(cropZoom.value) || 1;
+      drawAvatarCrop();
+    });
+    cropCanvas?.addEventListener("pointerdown", (event) => {
+      if (!avatarCropState) return;
+      avatarCropState.dragging = true;
+      avatarCropState.lastPointer = { x: event.clientX, y: event.clientY };
+      cropCanvas.setPointerCapture(event.pointerId);
+      cropCanvas.classList.add("dragging");
+    });
+    cropCanvas?.addEventListener("pointermove", (event) => {
+      if (!avatarCropState?.dragging) return;
+      const rect = cropCanvas.getBoundingClientRect();
+      const scale = AVATAR_CROP_SIZE / Math.max(rect.width, 1);
+      const last = avatarCropState.lastPointer;
+      avatarCropState.offsetX += (event.clientX - last.x) * scale;
+      avatarCropState.offsetY += (event.clientY - last.y) * scale;
+      avatarCropState.lastPointer = { x: event.clientX, y: event.clientY };
+      drawAvatarCrop();
+    });
+    ["pointerup", "pointercancel", "pointerleave"].forEach((eventName) => {
+      cropCanvas?.addEventListener(eventName, (event) => {
+        if (!avatarCropState) return;
+        avatarCropState.dragging = false;
+        cropCanvas.releasePointerCapture?.(event.pointerId);
+        cropCanvas.classList.remove("dragging");
+      });
+    });
+    $("#avatarCropCancel")?.addEventListener("click", () => {
+      closeAvatarCropper(true);
+    });
+    $("#avatarCropConfirm")?.addEventListener("click", () => {
+      if (!avatarCropState) return;
+      pendingAvatarDataUrl = exportAvatarCrop();
+      avatarCropState.confirmed = true;
+      closeAvatarCropper(false);
+      renderProfileAvatar(currentUser());
+      toast("头像已裁剪为 256×256，请保存档案");
+    });
+    cropDialog?.addEventListener("close", () => {
+      if (avatarCropState?.confirmed) return;
+      avatarInput.value = "";
+      avatarCropState = null;
+      renderProfileAvatar(currentUser());
+    });
     $("#profileForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       const data = new FormData(form);
       const user = currentUser();
-      const avatarFile = form.elements.avatarFile.files?.[0];
-      if (avatarFile) {
-        user.avatar = await readSingleFileAsDataUrl(avatarFile);
-        state.files.push(fileRecord(avatarFile, "profile", user.avatar));
+      const avatarFile = avatarInput?.files?.[0];
+      const previousAvatar = user.avatar;
+      const previousFileCount = state.files.length;
+      if (pendingAvatarDataUrl) {
+        user.avatar = pendingAvatarDataUrl;
+        if (avatarFile) state.files.push(fileRecord(avatarFile, "profile", pendingAvatarDataUrl));
       }
       user.nickname = String(data.get("nickname")).trim();
       user.realName = String(data.get("realName") || "").trim();
@@ -1344,39 +1899,338 @@
       user.campus = String(data.get("campus"));
       user.college = String(data.get("college")).trim();
       user.major = String(data.get("major")).trim();
-      user.grade = String(data.get("grade") || "大二");
-      user.contact = String(data.get("contact") || "").trim();
+      user.gradeCohort = String(data.get("gradeCohort") || "");
+      user.degree = String(data.get("degree") || "bachelor");
+      user.grade = computeGrade(user.gradeCohort, user.degree);
+      user.contacts = readContactRows();
+      user.contact = contactSummary(user.contacts);
       user.contactVisibility = String(data.get("contactVisibility"));
-      user.tags = getChecklistValues("profileTagChecklist");
+      user.realNameVisibility = data.get("realNameVisibilityToggle") === "on" ? "public" : "private";
+      user.tags = [...(user.tags || [])];
       user.bio = String(data.get("bio") || "").trim();
-      saveState();
-      renderAll();
-      toast("能力档案已保存");
+      try {
+        await persistCurrentProfile(user);
+        pendingAvatarDataUrl = "";
+        avatarInput.value = "";
+        renderAll();
+        toast("能力档案已保存");
+      } catch (error) {
+        user.avatar = previousAvatar;
+        state.files.splice(previousFileCount);
+        toast(error.message || "档案保存失败", "error");
+      }
     });
     $("#previewOwnResume")?.addEventListener("click", () => openResumePreview(CURRENT_USER_ID));
   }
 
+  function renderGradeCohortOptions() {
+    const select = $("#gradeCohort");
+    const user = currentUser();
+    if (!select) return;
+    const newest = currentAcademicYear();
+    const values = Array.from({ length: 10 }, (_, index) => String(newest - index));
+    if (user.gradeCohort && !values.includes(String(user.gradeCohort))) values.push(String(user.gradeCohort));
+    select.innerHTML = `<option value="">选择入学年份</option>${values
+      .sort((a, b) => Number(b) - Number(a))
+      .map((year) => `<option value="${year}">${year}</option>`)
+      .join("")}`;
+    if (user.gradeCohort) select.value = String(user.gradeCohort);
+    updateComputedGrade();
+  }
+
+  function renderNameVisibilitySwitch() {
+    const input = $("#realNameVisibilityToggle");
+    const label = $("[data-switch-label]");
+    if (label) label.textContent = input?.checked ? "展示" : "不展示";
+  }
+
+  function updateComputedGrade() {
+    const cohort = $("#gradeCohort")?.value || currentUser().gradeCohort;
+    const degree = $("#degree")?.value || currentUser().degree || "bachelor";
+    const grade = computeGrade(cohort, degree);
+    const output = $("#gradeComputed");
+    const hidden = $("#grade");
+    if (output) output.textContent = grade || "自动生成年级";
+    if (hidden) hidden.value = grade;
+  }
+
+  function renderContactRows(contacts = []) {
+    const container = $("#contactRows");
+    if (!container) return;
+    const rows = contacts.length ? contacts : [{ type: "wechat", value: "" }];
+    container.innerHTML = rows
+      .map(
+        (item) => `
+          <div class="contact-row">
+            <select name="contactType" aria-label="联系方式类型">
+              ${Object.entries(CONTACT_LABELS)
+                .map(([value, label]) => `<option value="${value}" ${item.type === value ? "selected" : ""}>${label}</option>`)
+                .join("")}
+            </select>
+            <input name="contactValue" value="${escapeAttr(item.value || "")}" aria-label="联系方式内容" placeholder="输入${CONTACT_LABELS[item.type] || "联系方式"}" />
+            <button class="contact-remove" type="button" data-remove-contact aria-label="删除这一行联系方式" title="点击一次确认删除">-</button>
+          </div>
+        `,
+      )
+      .join("");
+    $("#contact") && ($("#contact").value = contactSummary(readContactRows()));
+  }
+
+  function readContactRows(includeEmpty = false) {
+    const rows = $$("#contactRows .contact-row")
+      .map((row) => ({
+        type: row.querySelector("select")?.value || "wechat",
+        value: row.querySelector("input")?.value.trim() || "",
+      }));
+    return includeEmpty ? rows : rows.filter((item) => item.value);
+  }
+
+  function profileTagItems() {
+    const map = new Map();
+    (state.tags || []).forEach((tag) => {
+      map.set(normalizeSearchText(tag.name), { ...tag, name: tag.name, usageCount: Number(tag.usageCount) || 0 });
+    });
+    (currentUser().tags || []).forEach((name) => {
+      const key = normalizeSearchText(name);
+      if (!map.has(key)) map.set(key, { id: `local-${key}`, name, usageCount: 0, status: "pending" });
+    });
+    return Array.from(map.values());
+  }
+
+  function renderProfileTagPicker(query = "") {
+    const menu = $("#profileTagSuggestions");
+    const selected = $("#profileSelectedTags");
+    const hot = $("#profileHotTags");
+    const input = $("#profileTagSearch");
+    if (!menu || !selected || !hot) return;
+    const selectedNames = currentUser().tags || [];
+    const selectedSet = new Set(selectedNames.map(normalizeSearchText));
+    const normalizedQuery = normalizeSearchText(query);
+    const pickerOpen = profileTagMenuOpen && Boolean(normalizedQuery);
+    const official = (pickerOpen ? profileTagItems() : [])
+      .filter((tag) => tag.status !== "pending")
+      .filter((tag) => !normalizedQuery || normalizeSearchText(tag.name).includes(normalizedQuery))
+      .filter((tag) => !selectedSet.has(normalizeSearchText(tag.name)))
+      .sort((a, b) => {
+        const exactA = normalizeSearchText(a.name) === normalizedQuery ? 1 : 0;
+        const exactB = normalizeSearchText(b.name) === normalizedQuery ? 1 : 0;
+        return exactB - exactA || b.usageCount - a.usageCount || a.name.localeCompare(b.name, "zh-CN");
+      })
+      .slice(0, 8);
+    const exact = official.some((tag) => normalizeSearchText(tag.name) === normalizedQuery);
+    const options = official.map((tag) => ({ ...tag, request: false }));
+    if (pickerOpen && !exact && !selectedSet.has(normalizedQuery)) {
+      options.push({ name: String(query).trim(), usageCount: 0, request: true });
+    }
+    profileTagActiveIndex = Math.min(profileTagActiveIndex, Math.max(options.length - 1, 0));
+    menu.innerHTML = pickerOpen
+      ? options.length
+      ? options
+          .map(
+            (tag, index) => `
+              <button type="button" class="autocomplete-option ${index === profileTagActiveIndex ? "active" : ""}" data-profile-tag-option="true" data-tag-name="${escapeAttr(tag.name)}" data-tag-request="${String(Boolean(tag.request))}" role="option">
+                <span><strong>${escapeHtml(tag.name)}</strong>${tag.request ? "<small>加入候选词并提交管理员审核</small>" : ""}</span>
+                <em>${tag.request ? "新增" : `已有 ${tag.usageCount || 0} 人`}</em>
+              </button>
+            `,
+          )
+          .join("")
+      : `<div class="autocomplete-empty">没有重合标签，可直接添加为候选词</div>`
+      : "";
+    if (input) input.setAttribute("aria-expanded", String(Boolean(pickerOpen)));
+    selected.innerHTML = selectedNames.length
+      ? selectedNames
+          .map(
+            (name) => `<button type="button" class="selected-tag" data-remove-profile-tag="${escapeAttr(name)}">${escapeHtml(name)} <span aria-hidden="true">×</span></button>`,
+          )
+          .join("")
+      : `<span class="tag-empty">还没有添加标签</span>`;
+    hot.innerHTML = profileTagItems()
+      .filter((tag) => tag.status !== "pending" && !selectedSet.has(normalizeSearchText(tag.name)))
+      .sort((a, b) => b.usageCount - a.usageCount || a.name.localeCompare(b.name, "zh-CN"))
+      .slice(0, 10)
+      .map((tag) => `<button type="button" class="hot-tag" data-hot-tag="${escapeAttr(tag.name)}">${escapeHtml(tag.name)} <small>${tag.usageCount || 0}</small></button>`)
+      .join("");
+  }
+
+  async function addProfileTag(name, request = false) {
+    const value = String(name || "").trim();
+    if (!value) return;
+    closeProfileTagMenu();
+    const user = currentUser();
+    if ((user.tags || []).some((tag) => normalizeSearchText(tag) === normalizeSearchText(value))) {
+      $("#profileTagSearch").value = "";
+      renderProfileTagPicker();
+      return;
+    }
+    user.tags = [...(user.tags || []), value];
+    $("#profileTagSearch").value = "";
+    renderProfileTagPicker();
+    if (request) {
+      try {
+        await apiRequest("/catalog/tag-requests", { method: "POST", body: JSON.stringify({ name: value }) });
+        toast(`“${value}”已加入并提交审核`);
+      } catch (error) {
+        toast(error.message || "候选标签提交失败", "error");
+      }
+    }
+  }
+
+  const AVATAR_CROP_SIZE = 320;
+  const AVATAR_OUTPUT_SIZE = 256;
+
+  async function openAvatarCropper(file) {
+    const dataUrl = await readSingleFileAsDataUrl(file);
+    const image = await loadImage(dataUrl);
+    avatarCropState = {
+      image,
+      file,
+      zoom: 1,
+      offsetX: 0,
+      offsetY: 0,
+      dragging: false,
+      confirmed: false,
+      lastPointer: null,
+    };
+    const zoom = $("#avatarCropZoom");
+    if (zoom) zoom.value = "1";
+    drawAvatarCrop();
+    const dialog = $("#avatarCropDialog");
+    if (dialog && !dialog.open) dialog.showModal();
+  }
+
+  function loadImage(dataUrl) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("图片无法读取"));
+      image.src = dataUrl;
+    });
+  }
+
+  function avatarCropMetrics() {
+    const image = avatarCropState?.image;
+    if (!image) return null;
+    const cover = Math.max(AVATAR_CROP_SIZE / image.naturalWidth, AVATAR_CROP_SIZE / image.naturalHeight);
+    const scale = cover * (Number(avatarCropState.zoom) || 1);
+    const width = image.naturalWidth * scale;
+    const height = image.naturalHeight * scale;
+    return { width, height };
+  }
+
+  function clampAvatarCrop() {
+    const metrics = avatarCropMetrics();
+    if (!metrics || !avatarCropState) return;
+    const maxX = Math.max(0, (metrics.width - AVATAR_CROP_SIZE) / 2);
+    const maxY = Math.max(0, (metrics.height - AVATAR_CROP_SIZE) / 2);
+    avatarCropState.offsetX = Math.max(-maxX, Math.min(maxX, avatarCropState.offsetX));
+    avatarCropState.offsetY = Math.max(-maxY, Math.min(maxY, avatarCropState.offsetY));
+  }
+
+  function drawAvatarCrop(canvas = $("#avatarCropCanvas"), size = AVATAR_CROP_SIZE) {
+    if (!canvas || !avatarCropState?.image) return;
+    const metrics = avatarCropMetrics();
+    const scale = size / AVATAR_CROP_SIZE;
+    const context = canvas.getContext("2d");
+    clampAvatarCrop();
+    context.clearRect(0, 0, size, size);
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, size, size);
+    const x = (size - metrics.width * scale) / 2 + avatarCropState.offsetX * scale;
+    const y = (size - metrics.height * scale) / 2 + avatarCropState.offsetY * scale;
+    context.drawImage(avatarCropState.image, x, y, metrics.width * scale, metrics.height * scale);
+  }
+
+  function exportAvatarCrop() {
+    const output = document.createElement("canvas");
+    output.width = AVATAR_OUTPUT_SIZE;
+    output.height = AVATAR_OUTPUT_SIZE;
+    drawAvatarCrop(output, AVATAR_OUTPUT_SIZE);
+    return output.toDataURL("image/jpeg", 0.86);
+  }
+
+  function closeAvatarCropper(resetInput) {
+    const dialog = $("#avatarCropDialog");
+    if (resetInput) $("#profileAvatarFile").value = "";
+    if (dialog?.open) dialog.close();
+    if (resetInput) avatarCropState = null;
+  }
+
   function bindAwards() {
     const form = $("#awardForm");
+    const search = $("#awardCompetitionSearch");
+    search?.addEventListener("input", (event) => {
+      awardCompetitionActiveIndex = 0;
+      awardCompetitionMenuOpen = Boolean(normalizeSearchText(event.currentTarget.value));
+      renderAwardCompetitionSuggestions(event.currentTarget.value);
+    });
+    search?.addEventListener("focus", (event) => {
+      if (normalizeSearchText(event.currentTarget.value)) {
+        awardCompetitionMenuOpen = true;
+        renderAwardCompetitionSuggestions(event.currentTarget.value);
+      }
+    });
+    search?.addEventListener("keydown", (event) => {
+      const options = $$('[data-award-competition-option="true"]', $("#awardCompetitionSuggestions"));
+      if (event.key === "ArrowDown" && options.length) {
+        event.preventDefault();
+        awardCompetitionActiveIndex = (awardCompetitionActiveIndex + 1) % options.length;
+        renderAwardCompetitionSuggestions(event.currentTarget.value);
+      } else if (event.key === "ArrowUp" && options.length) {
+        event.preventDefault();
+        awardCompetitionActiveIndex = (awardCompetitionActiveIndex - 1 + options.length) % options.length;
+        renderAwardCompetitionSuggestions(event.currentTarget.value);
+      } else if (event.key === "Enter") {
+        const option = options[awardCompetitionActiveIndex] || options[0];
+        if (option) {
+          event.preventDefault();
+          selectAwardCompetition(option.dataset.competitionId);
+        }
+      } else if (event.key === "Escape") {
+        closeAwardCompetitionMenu();
+      }
+    });
+    $("#awardCompetitionSuggestions")?.addEventListener("click", (event) => {
+      const option = event.target.closest('[data-award-competition-option="true"]');
+      if (option) selectAwardCompetition(option.dataset.competitionId);
+    });
     form.addEventListener("input", renderAwardPreview);
-    form.addEventListener("change", renderAwardPreview);
-    $("#awardForm").addEventListener("submit", (event) => {
+    form.addEventListener("change", () => {
+      syncSoloAwardFields();
+      renderAwardPreview();
+    });
+    $("#awardForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       const award = awardFromForm(form);
-      currentUser().awards.unshift(award);
-      const duplicate = duplicateAwardHint(currentUser(), award);
-      form.reset();
-      saveState();
-      renderProfile();
-      renderAwardPreview();
-      toast(duplicate || "竞赛履历已添加");
+      const user = currentUser();
+      user.awards.unshift(award);
+      const duplicate = duplicateAwardHint(user, award);
+      try {
+        await persistCurrentProfile(user);
+        form.reset();
+        delete form.dataset.competitionId;
+        syncSoloAwardFields();
+        renderProfile();
+        renderAwardPreview();
+        toast(duplicate || "竞赛履历已添加");
+      } catch (error) {
+        user.awards = user.awards.filter((item) => item.id !== award.id);
+        toast(error.message || "竞赛履历保存失败", "error");
+      }
     });
     $("#awardList").addEventListener("click", (event) => {
       const button = event.target.closest("[data-delete-award]");
       if (!button) return;
-      currentUser().awards = currentUser().awards.filter((item) => item.id !== button.dataset.deleteAward);
-      saveState();
-      renderProfile();
+      const user = currentUser();
+      const previous = [...user.awards];
+      user.awards = user.awards.filter((item) => item.id !== button.dataset.deleteAward);
+      persistCurrentProfile(user)
+        .then(() => renderProfile())
+        .catch((error) => {
+          user.awards = previous;
+          toast(error.message || "竞赛履历删除失败", "error");
+          renderProfile();
+        });
     });
   }
 
@@ -1385,11 +2239,13 @@
     return {
       id: uid("award"),
       name: String(data.get("name")).trim(),
-      shortName: String(data.get("shortName") || "").trim() || shortNameForAward(data.get("name")),
+      shortName: String(data.get("shortName") || "").trim(),
       year: Number(data.get("year")) || new Date().getFullYear(),
       level: String(data.get("level")),
       role: String(data.get("role")),
       award: String(data.get("award")),
+      bonusType: String(data.get("bonusType") || ""),
+      competitionId: form.dataset.competitionId || "",
       solo: data.get("solo") === "on",
     };
   }
@@ -1398,9 +2254,82 @@
     const form = $("#awardForm");
     const preview = $("#awardPreview");
     if (!form || !preview) return;
+    syncSoloAwardFields();
     const award = awardFromForm(form);
     const duplicate = duplicateAwardHint(currentUser(), award);
-    preview.textContent = `奖项标签预览：${award.shortName || "竞赛简称"} ${awardText(award.award)}${duplicate ? `；${duplicate}` : ""}`;
+    preview.textContent = `奖项标签预览：${award.shortName || shortNameForAward(award.name) || "竞赛简称"} ${awardText(award.award)}${award.bonusType ? ` · ${bonusTypeText(award.bonusType)}` : ""}${duplicate ? `；${duplicate}` : ""}`;
+  }
+
+  function renderAwardCompetitionSuggestions(query = "") {
+    const menu = $("#awardCompetitionSuggestions");
+    const input = $("#awardCompetitionSearch");
+    if (!menu) return;
+    const normalized = normalizeSearchText(query);
+    const pickerOpen = awardCompetitionMenuOpen && Boolean(normalized);
+    const options = (pickerOpen ? state.competitions || [] : [])
+      .filter((item) => {
+        if (!normalized) return true;
+        return [item.name, item.subtitle, ...(item.aliases || [])].some((value) => normalizeSearchText(value).includes(normalized));
+      })
+      .sort((a, b) => {
+        const score = (item) => {
+          const values = [item.name, ...(item.aliases || [])].map(normalizeSearchText);
+          return values.some((value) => value === normalized) ? 2 : values.some((value) => value.startsWith(normalized)) ? 1 : 0;
+        };
+        return score(b) - score(a) || a.name.localeCompare(b.name, "zh-CN");
+      })
+      .slice(0, 8);
+    awardCompetitionActiveIndex = Math.min(awardCompetitionActiveIndex, Math.max(options.length - 1, 0));
+    menu.innerHTML = pickerOpen
+      ? options.length
+      ? options
+          .map(
+            (item, index) => `
+              <button type="button" class="autocomplete-option ${index === awardCompetitionActiveIndex ? "active" : ""}" data-award-competition-option="true" data-competition-id="${escapeAttr(item.id)}" role="option">
+                <span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml((item.aliases || []).join(" / ") || item.subtitle || "暂无简称")}</small></span>
+                <em>${escapeHtml(item.level || "未标注")}</em>
+              </button>
+            `,
+          )
+          .join("")
+      : `<div class="autocomplete-empty">没有匹配项，可以直接输入新的竞赛全名</div>`
+      : "";
+    input?.setAttribute("aria-expanded", String(Boolean(pickerOpen)));
+  }
+
+  function closeProfileTagMenu() {
+    profileTagMenuOpen = false;
+    $("#profileTagSuggestions") && ($("#profileTagSuggestions").innerHTML = "");
+    $("#profileTagSearch")?.setAttribute("aria-expanded", "false");
+  }
+
+  function closeAwardCompetitionMenu() {
+    awardCompetitionMenuOpen = false;
+    $("#awardCompetitionSuggestions") && ($("#awardCompetitionSuggestions").innerHTML = "");
+    $("#awardCompetitionSearch")?.setAttribute("aria-expanded", "false");
+  }
+
+  function selectAwardCompetition(id) {
+    const item = (state.competitions || []).find((competition) => competition.id === id);
+    const form = $("#awardForm");
+    if (!item || !form) return;
+    form.dataset.competitionId = item.id;
+    form.elements.name.value = item.name;
+    if (!form.elements.shortName.value && item.aliases?.length) form.elements.shortName.value = item.aliases[0];
+    if (item.level === "国家" || item.level === "国家级") form.elements.level.value = "national";
+    if (item.level === "国家级-保研加分") form.elements.level.value = "national_recommendation";
+    form.elements.bonusType.value = item.bonusType || "";
+    closeAwardCompetitionMenu();
+    renderAwardPreview();
+  }
+
+  function syncSoloAwardFields() {
+    const form = $("#awardForm");
+    const solo = form?.elements.solo;
+    const role = form?.elements.role;
+    if (!solo || !role) return;
+    role.disabled = solo.checked;
+    if (solo.checked) role.value = "captain";
   }
 
   function duplicateAwardHint(user, award) {
@@ -1422,26 +2351,38 @@
         toast("标签已存在", "error");
         return;
       }
-      state.tags.push({ id: uid("tag"), name, status: "official", createdAt: new Date().toISOString() });
-      input.value = "";
-      saveState();
-      renderAll();
-      toast("标签已添加");
+      apiRequest("/catalog/tags", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      })
+        .then(() => {
+          input.value = "";
+          return refreshRemoteState();
+        })
+        .then(() => toast("标签已添加"))
+        .catch((error) => toast(error.message || "标签添加失败", "error"));
     });
     $("#competitionAdminForm").addEventListener("submit", (event) => {
       event.preventDefault();
       const form = event.currentTarget;
       const name = form.elements.competitionName.value.trim();
       if (!name) return;
-      state.competitions.push({
-        id: uid("c"),
-        name,
-        level: form.elements.competitionLevel.value,
-      });
-      form.reset();
-      saveState();
-      renderAll();
-      toast("竞赛已添加");
+      apiRequest("/catalog/competitions", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          level: form.elements.competitionLevel.value,
+          subtitle: name,
+          aliases: form.elements.competitionAliases.value.split(",").map((item) => item.trim()).filter(Boolean),
+          bonusType: form.elements.competitionBonusType.value,
+        }),
+      })
+        .then(() => {
+          form.reset();
+          return refreshRemoteState();
+        })
+        .then(() => toast("竞赛已添加"))
+        .catch((error) => toast(error.message || "竞赛添加失败", "error"));
     });
     $("#projectAdminForm")?.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -1452,36 +2393,74 @@
       const form = event.currentTarget;
       const title = form.elements.projectTitle.value.trim();
       if (!title) return;
-      state.projects.push({
-        id: uid("project"),
-        programId: form.elements.projectProgramId.value,
-        title,
-        summary: form.elements.projectSummary.value.trim(),
-        source: "library",
-        libraryYear: `${new Date().getFullYear()}项目库`,
-        college: "",
-        advisor: "",
-        interdisciplinary: false,
-        active: true,
-      });
-      form.reset();
-      saveState();
-      renderAll();
-      toast("项目已加入项目库");
+      apiRequest("/catalog/projects", {
+        method: "POST",
+        body: JSON.stringify({
+          title,
+          programId: form.elements.projectProgramId.value,
+          summary: form.elements.projectSummary.value.trim(),
+          source: "library",
+          libraryYear: String(new Date().getFullYear()) + "项目库",
+        }),
+      })
+        .then(() => {
+          form.reset();
+          return refreshRemoteState();
+        })
+        .then(() => toast("项目已加入项目库"))
+        .catch((error) => toast(error.message || "项目添加失败", "error"));
     });
     $("#adminTags").addEventListener("click", (event) => {
       const button = event.target.closest("[data-delete-tag]");
       if (!button) return;
-      state.tags = state.tags.filter((tag) => tag.id !== button.dataset.deleteTag);
-      saveState();
-      renderAll();
+      apiRequest("/catalog/tags/" + encodeURIComponent(button.dataset.deleteTag), {
+        method: "PATCH",
+        body: JSON.stringify({ active: false }),
+      })
+        .then(() => refreshRemoteState())
+        .catch((error) => toast(error.message || "标签停用失败", "error"));
     });
     $("#adminCompetitions").addEventListener("click", (event) => {
       const button = event.target.closest("[data-delete-competition]");
-      if (!button) return;
-      state.competitions = state.competitions.filter((item) => item.id !== button.dataset.deleteCompetition);
-      saveState();
-      renderAll();
+      const edit = event.target.closest("[data-edit-competition]");
+      const merge = event.target.closest("[data-merge-competition]");
+      if (!button && !edit && !merge) return;
+      if (button) {
+        apiRequest("/catalog/competitions/" + encodeURIComponent(button.dataset.deleteCompetition), {
+          method: "PATCH",
+          body: JSON.stringify({ active: false }),
+        })
+          .then(() => refreshRemoteState())
+          .catch((error) => toast(error.message || "竞赛停用失败", "error"));
+        return;
+      }
+      const item = state.competitions.find((competition) => competition.id === (edit?.dataset.editCompetition || merge?.dataset.mergeCompetition));
+      if (!item) return;
+      if (edit) {
+        const aliases = window.prompt("修改别名 / 简称，用逗号分隔", (item.aliases || []).join(","));
+        if (aliases === null) return;
+        apiRequest("/catalog/competitions/" + encodeURIComponent(item.id), {
+          method: "PATCH",
+          body: JSON.stringify({ aliases: aliases.split(",").map((value) => value.trim()).filter(Boolean), bonusType: item.bonusType || "" }),
+        })
+          .then(() => refreshRemoteState())
+          .then(() => toast("竞赛别名已更新"))
+          .catch((error) => toast(error.message || "竞赛别名更新失败", "error"));
+        return;
+      }
+      const targetName = window.prompt("输入要合并到的竞赛全名或简称", "");
+      const target = state.competitions.find((competition) => competition.id !== item.id && [competition.name, ...(competition.aliases || [])].some((value) => normalizeSearchText(value) === normalizeSearchText(targetName)));
+      if (!target) {
+        toast("没有找到合并目标", "error");
+        return;
+      }
+      apiRequest("/catalog/competitions/" + encodeURIComponent(item.id), {
+        method: "PATCH",
+        body: JSON.stringify({ mergeInto: target.id }),
+      })
+        .then(() => refreshRemoteState())
+        .then(() => toast(`已合并到${target.name}`))
+        .catch((error) => toast(error.message || "竞赛合并失败", "error"));
     });
     $("#adminProjects")?.addEventListener("click", (event) => {
       const button = event.target.closest("[data-delete-project]");
@@ -1492,10 +2471,13 @@
       }
       const project = projectById(button.dataset.deleteProject);
       if (!project) return;
-      project.active = false;
-      saveState();
-      renderAll();
-      toast("项目已停用");
+      apiRequest("/catalog/projects/" + encodeURIComponent(project.id), {
+        method: "PATCH",
+        body: JSON.stringify({ active: false }),
+      })
+        .then(() => refreshRemoteState())
+        .then(() => toast("项目已停用"))
+        .catch((error) => toast(error.message || "项目停用失败", "error"));
     });
     $("#adminUsers")?.addEventListener("click", (event) => {
       const appoint = event.target.closest("[data-appoint-admin]");
@@ -1509,32 +2491,26 @@
       const user = userById(id);
       if (!user || id === state.platform.creatorId) return;
       const appointing = Boolean(appoint);
-      user.systemRole = appointing ? "admin" : null;
-      state.platform.adminIds = state.users.filter((item) => item.systemRole === "admin").map((item) => item.id);
-      state.platform.auditLog.unshift({
-        id: uid("audit"),
-        action: appointing ? "appoint_admin" : "revoke_admin",
-        targetId: id,
-        operator: currentUser().nickname,
-        createdAt: new Date().toISOString(),
-      });
-      saveState();
-      renderAll();
-      toast(appointing ? "已任命系统管理员" : "已撤销系统管理员");
+      apiRequest("/admin/users/" + encodeURIComponent(id), {
+        method: "PATCH",
+        body: JSON.stringify({ systemRole: appointing ? "admin" : null }),
+      })
+        .then(() => refreshRemoteState())
+        .then(() => toast(appointing ? "已任命系统管理员" : "已撤销系统管理员"))
+        .catch((error) => toast(error.message || "管理员权限更新失败", "error"));
     });
     $("#customTagReview").addEventListener("click", (event) => {
       const approve = event.target.closest("[data-approve-tag]");
       const reject = event.target.closest("[data-reject-tag]");
       if (!approve && !reject) return;
       const id = approve?.dataset.approveTag || reject?.dataset.rejectTag;
-      const item = state.customTags.find((tag) => tag.id === id);
-      if (!item) return;
-      item.status = approve ? "approved" : "rejected";
-      if (approve && !state.tags.some((tag) => tag.name === item.name)) {
-        state.tags.push({ id: uid("tag"), name: item.name, status: "official", createdAt: new Date().toISOString() });
-      }
-      saveState();
-      renderAll();
+      apiRequest("/catalog/tag-requests/" + encodeURIComponent(id), {
+        method: "PATCH",
+        body: JSON.stringify({ status: approve ? "approved" : "rejected" }),
+      })
+        .then(() => refreshRemoteState())
+        .then(() => toast(approve ? "标签已通过并加入标签集" : "标签申请已拒绝"))
+        .catch((error) => toast(error.message || "标签审核失败", "error"));
     });
     $("#reportList").addEventListener("click", (event) => {
       const button = event.target.closest("[data-resolve-report]");
@@ -1546,26 +2522,29 @@
     });
   }
 
+  function resetLocalCache(resetUi = false) {
+    state.files = [];
+    state.reports = [];
+    if (resetUi) state.ui = { ...DEFAULT_UI };
+    state = ensureStateShape(state, currentUser());
+    saveState();
+    renderAll();
+  }
+
   function bindFiles() {
     $("#exportAll").addEventListener("click", exportData);
     $("#exportData").addEventListener("click", exportData);
     $("#saveSnapshot").addEventListener("click", exportData);
     $("#importData").addEventListener("change", importData);
     $("#clearData").addEventListener("click", () => {
-      if (!confirm("确定清空本地数据吗？此操作只影响当前浏览器。")) return;
-      localStorage.removeItem(STORAGE_KEY);
-      localStorage.removeItem(DRAFT_KEY);
-      state = ensureStateShape(demoState());
-      saveState();
-      renderAll();
-      toast("本地数据已清空并重建演示数据");
+      if (!confirm("确定清空当前浏览器缓存吗？本地附件和本地管理记录会删除；服务器上的招募、申请、消息和草稿不会删除。")) return;
+      resetLocalCache();
+      toast("本地缓存已清空，服务器业务数据未删除");
     });
     $("#resetDemo").addEventListener("click", () => {
-      if (!confirm("恢复演示数据会覆盖当前原型数据，继续吗？")) return;
-      state = ensureStateShape(demoState());
-      saveState();
-      renderAll();
-      toast("演示数据已恢复");
+      if (!confirm("确定重置当前浏览器缓存和界面设置吗？服务器上的招募、申请、消息和草稿不会删除。")) return;
+      resetLocalCache(true);
+      toast("本地缓存已重置，服务器业务数据未删除");
     });
     $("#libraryFiles").addEventListener("change", (event) => {
       pendingLibraryFiles = Array.from(event.target.files || []);
@@ -1608,35 +2587,64 @@
     $("#recruitmentList").addEventListener("click", (event) => {
       const detail = event.target.closest("[data-detail]");
       const resume = event.target.closest("[data-resume]");
+      const project = event.target.closest("[data-project-preview]");
       const apply = event.target.closest("[data-apply]");
       const review = event.target.closest("[data-open-review]");
       const progress = event.target.closest("[data-open-progress]");
+      const clear = event.target.closest("[data-clear-filters]");
+      const jump = event.target.closest("[data-view-jump]");
+      if (clear) {
+        $("#clearFilters").click();
+        return;
+      }
+      if (project) openProjectPreview(project.dataset.projectPreview);
       if (detail) openDetail(detail.dataset.detail);
       if (resume) openResumePreview(resume.dataset.resume);
       if (apply) openDetail(apply.dataset.apply, true);
       if (review) showView("mine", { step: "review" });
       if (progress) showView("messages", { step: "apply" });
+      if (jump) showView(jump.dataset.viewJump, { step: jump.dataset.stepJump || jump.dataset.step });
     });
     $("#detailDialog").addEventListener("click", (event) => {
       const apply = event.target.closest("[data-submit-application]");
       const resume = event.target.closest("[data-resume]");
+      const project = event.target.closest("[data-project-preview]");
       if (apply) submitApplication(apply.dataset.submitApplication);
       if (resume) openResumePreview(resume.dataset.resume);
+      if (project) openProjectPreview(project.dataset.projectPreview);
     });
     $("#myRecruitments").addEventListener("click", (event) => {
       const close = event.target.closest("[data-close-recruitment]");
+      const detail = event.target.closest("[data-detail]");
+      const jump = event.target.closest("[data-view-jump]");
+      if (jump) {
+        showView(jump.dataset.viewJump, { step: jump.dataset.stepJump || jump.dataset.step });
+        return;
+      }
+      if (detail) {
+        openDetail(detail.dataset.detail);
+        return;
+      }
       if (!close) return;
       const item = state.recruitments.find((rec) => rec.id === close.dataset.closeRecruitment);
       if (!item) return;
-      item.status = "closed";
-      addMessage("notification", "招募已关闭", `${item.competition} 不再接收新申请。`);
-      saveState();
-      renderAll();
+      apiRequest("/recruitments/" + encodeURIComponent(item.id), {
+        method: "PATCH",
+        body: JSON.stringify({ status: "closed" }),
+      })
+        .then(() => refreshRemoteState())
+        .then(() => toast("招募已关闭"))
+        .catch((error) => toast(error.message || "关闭招募失败", "error"));
     });
     $("#applicationReview").addEventListener("click", (event) => {
       const resume = event.target.closest("[data-resume]");
+      const detail = event.target.closest("[data-detail]");
       if (resume) {
         openResumePreview(resume.dataset.resume);
+        return;
+      }
+      if (detail) {
+        openDetail(detail.dataset.detail);
         return;
       }
       const approve = event.target.closest("[data-approve-app]");
@@ -1648,12 +2656,31 @@
       }
       reviewApplication(approve?.dataset.approveApp || reject?.dataset.rejectApp, Boolean(approve));
     });
+    $("#notificationList").addEventListener("click", async (event) => {
+      const copy = event.target.closest("[data-copy-contact]");
+      const detail = event.target.closest("[data-detail]");
+      const jump = event.target.closest("[data-view-jump]");
+      if (copy) {
+        const value = copy.dataset.copyContact;
+        try {
+          await navigator.clipboard.writeText(value);
+          copy.textContent = "已复制";
+          setTimeout(() => {
+            copy.textContent = "复制联系方式";
+          }, 1600);
+          toast("联系方式已复制");
+        } catch {
+          toast(value);
+        }
+        return;
+      }
+      if (detail) openDetail(detail.dataset.detail);
+      if (jump) showView(jump.dataset.viewJump, { step: jump.dataset.stepJump || jump.dataset.step });
+    });
     $("#markRead").addEventListener("click", () => {
-      [...state.messages, ...state.conversations].forEach((item) => {
-        item.read = true;
-      });
-      saveState();
-      renderMessages();
+      apiRequest("/messages/read", { method: "POST" })
+        .then(() => refreshRemoteState())
+        .catch((error) => toast(error.message || "消息状态更新失败", "error"));
     });
     $("#conversationList").addEventListener("click", async (event) => {
       const button = event.target.closest("[data-copy-contact]");
@@ -1668,49 +2695,6 @@
         toast("联系方式已复制");
       } catch {
         toast(value);
-      }
-    });
-    $("#collaborationList").addEventListener("click", async (event) => {
-      const copy = event.target.closest("[data-copy-collab-contact]");
-      const openFiles = event.target.closest("[data-open-collab-files]");
-      const detail = event.target.closest("[data-detail]");
-      const jump = event.target.closest("[data-view-jump]");
-      if (copy) {
-        const value = copy.dataset.copyCollabContact;
-        try {
-          await navigator.clipboard.writeText(value);
-          copy.textContent = "已复制";
-          setTimeout(() => {
-            copy.textContent = "复制联系卡";
-          }, 1600);
-          toast("联系卡已复制");
-        } catch {
-          toast(value);
-        }
-      }
-      if (detail) openDetail(detail.dataset.detail);
-      if (openFiles) showView("files", { step: "collaborate" });
-      if (jump) showView(jump.dataset.viewJump, { step: jump.dataset.stepJump || jump.dataset.step });
-    });
-    $("#collaborationFileList").addEventListener("click", (event) => {
-      const openFiles = event.target.closest("[data-open-collab-files]");
-      if (openFiles) showView("files", { step: "collaborate" });
-    });
-    $("#collaborationList").addEventListener("change", (event) => {
-      const task = event.target.closest("[data-collab-task]");
-      const meeting = event.target.closest("[data-collab-meeting]");
-      if (task) updateCollaborationTask(task.dataset.collabKey, task.dataset.collabTask, task.checked);
-      if (meeting) updateCollaborationField(meeting.dataset.collabKey, "meetingAt", meeting.value);
-    });
-    $("#collaborationList").addEventListener("input", (event) => {
-      const note = event.target.closest("[data-collab-note]");
-      if (note) updateCollaborationField(note.dataset.collabKey, "note", note.value, false);
-    });
-    $("#collaborationList").addEventListener("focusout", (event) => {
-      const note = event.target.closest("[data-collab-note]");
-      if (note) {
-        updateCollaborationField(note.dataset.collabKey, "note", note.value);
-        toast("协作备注已保存");
       }
     });
     $("#exportProfile").addEventListener("click", () => {
@@ -1729,7 +2713,6 @@
     renderProfile();
     renderMine();
     renderMessages();
-    renderCollaboration();
     renderAdmin();
     renderFiles();
   }
@@ -1738,17 +2721,25 @@
     const role = currentRole();
     const step = currentTaskStep();
     $$("#roleSwitch [data-role]").forEach((button) => {
+      const restricted = button.dataset.role === "admin" || button.dataset.role === "creator";
+      const systemRole = currentUser().systemRole;
+      const allowed = button.dataset.role === "admin"
+        ? systemRole === "admin" || systemRole === "creator"
+        : systemRole === button.dataset.role;
+      button.hidden = restricted && !allowed;
       button.classList.toggle("active", button.dataset.role === role);
     });
     $$(".task-step").forEach((button) => {
       button.classList.toggle("active", button.dataset.step === step);
     });
     $$(".nav-item, .mobile-nav").forEach((button) => {
-      button.classList.toggle("active", button.dataset.step === step);
+      const advancedButton = button.classList.contains("advanced-nav-item");
+      const activeView = $(".view.active")?.id?.replace("view-", "");
+      button.classList.toggle("active", advancedButton ? button.dataset.view === activeView : button.dataset.step === step);
     });
-    const advanced = $("#advancedTools");
+    const advancedNav = $("#advancedNav");
     const toggle = $("#toggleAdvanced");
-    advanced?.classList.toggle("hidden", !state.ui.advancedOpen);
+    advancedNav?.classList.toggle("hidden", !state.ui.advancedOpen);
     if (toggle) {
       toggle.textContent = state.ui.advancedOpen ? "收起高级工具" : "高级工具";
       toggle.setAttribute("aria-expanded", String(Boolean(state.ui.advancedOpen)));
@@ -1757,21 +2748,21 @@
     $("#profileReadiness").textContent = readiness.label;
     $("#applicationProgress").textContent = applicationProgressLabel();
     $("#captainQueue").textContent = `待审 ${pendingReviewCount()}`;
-    $("#collaborationProgress").textContent = collaborationProgressLabel();
     document.body.dataset.role = role;
     document.body.dataset.step = step;
     document.documentElement.dataset.theme = state.ui.theme || "light";
     const themeButton = $("#toggleTheme");
     if (themeButton) {
-      themeButton.textContent = state.ui.theme === "dark" ? "浅色" : "深色";
-      themeButton.setAttribute("aria-label", state.ui.theme === "dark" ? "切换浅色模式" : "切换深色模式");
+      const nextThemeLabel = state.ui.theme === "dark" ? "切换到浅色模式" : "切换到深色模式";
+      themeButton.setAttribute("aria-label", nextThemeLabel);
+      themeButton.setAttribute("title", nextThemeLabel);
     }
   }
 
   function renderSession() {
     const user = currentUser();
-    $("#sessionName").textContent = user.nickname;
-    $("#sessionMeta").textContent = `${ROLE_LABELS[currentRole()]} · ${user.grade || "未填写年级"} · ${user.campus}`;
+    $("#sessionName").textContent = user.nickname || user.account || "未登录";
+    $("#sessionMeta").textContent = `${ROLE_LABELS[currentRole()]} · ${user.grade || "未填写年级"} · ${user.campus || "未填写校区"}`;
   }
 
   function renderMetrics() {
@@ -1814,14 +2805,6 @@
     return "待申请";
   }
 
-  function collaborationProgressLabel() {
-    const contactCards = state.conversations.filter((item) => item.contact).length;
-    const accepted = userApplications().filter(({ application }) => application.status === "accepted").length;
-    if (contactCards) return `联系卡 ${contactCards}`;
-    if (accepted) return `已匹配 ${accepted}`;
-    return "匹配后开放";
-  }
-
   function profileReadiness(user) {
     const checks = [
       ["昵称", user.nickname],
@@ -1829,7 +2812,7 @@
       ["学院", user.college],
       ["专业", user.major],
       ["年级", user.grade],
-      ["联系方式", user.contact],
+      ["联系方式", user.contacts?.length || user.contact],
       ["个人标签", user.tags?.length],
     ];
     const missing = checks.filter(([, value]) => !value).map(([label]) => label);
@@ -1855,8 +2838,8 @@
     $("#profileTagSelect").innerHTML = tagOptions;
     setMultiValues($("#profileTagSelect"), currentUser().tags || []);
     renderCheckboxGrid("publishTagChecklist", state.tags, getChecklistValues("publishTagChecklist"));
-    renderCheckboxGrid("profileTagChecklist", state.tags, currentUser().tags || []);
-    setChecklistValues("profileTagChecklist", currentUser().tags || []);
+    renderProfileTagPicker($("#profileTagSearch")?.value || "");
+    renderGradeCohortOptions();
     const draft = activeDraftId ? state.drafts.find((item) => item.id === activeDraftId)?.data : null;
     renderCompetitionChecklist(normalizeDraftData(draft || {}).competitionIds || []);
   }
@@ -1884,7 +2867,7 @@
           </div>
           <span class="status-pill ${active ? "open" : "closed"}">${active ? "编辑中" : "草稿"}</span>
         </header>
-        <p>${escapeHtml(programById(data.programId).name)} · ${escapeHtml(data.campus)} · ${escapeHtml(grades)} · ${formatTime(draft.updatedAt)}</p>
+        <p>${programLabelMarkup(programById(data.programId))} · ${escapeHtml(data.campus)} · ${escapeHtml(grades)} · ${formatTime(draft.updatedAt)}</p>
         <div class="item-actions">
           <button class="ghost-button" type="button" data-load-draft="${draft.id}">载入</button>
           <button class="ghost-button danger" type="button" data-delete-draft="${draft.id}">删除</button>
@@ -1932,7 +2915,31 @@
     $("#resultCount").textContent = `${items.length} 条结果`;
     $("#recruitmentList").innerHTML = items.length
       ? items.map((item) => recruitmentCard(item)).join("")
-      : `<div class="list-item"><h5>没有匹配的招募</h5><p class="file-meta">调整筛选条件或发布新的招募。</p></div>`;
+      : emptyRecruitmentState();
+  }
+
+  function emptyRecruitmentState() {
+    const form = $("#filterForm");
+    const hasFilters = Boolean(
+      $("#filterSearch")?.value.trim() ||
+        $("#filterCampus")?.value ||
+        $("#filterProgram")?.value ||
+        $("#filterCollege")?.value.trim() ||
+        $("#filterStatus")?.value ||
+        $("#filterGrade")?.value ||
+        selectedFilterTags.size,
+    );
+    return hasFilters
+      ? `<div class="empty-state">
+          <strong>没有符合条件的招募</strong>
+          <p>当前筛选没有找到结果，先清空一项条件，或换一个技能和校区。</p>
+          <button class="ghost-button" type="button" data-clear-filters>清空筛选</button>
+        </div>`
+      : `<div class="empty-state">
+          <strong>暂时没有开放招募</strong>
+          <p>新的队伍发布后会出现在这里。队长可以先发布一个清晰的项目题目和技能缺口。</p>
+          <button class="ghost-button" type="button" data-view-jump="publish" data-step-jump="review">发布招募</button>
+        </div>`;
   }
 
   function explainMatch(item, user = currentUser()) {
@@ -1950,7 +2957,7 @@
           ? "同校区"
           : `${item.campus} 可跨校区沟通`;
     const program = programById(item.programId);
-    const qualified = !program.eligibleGrades?.length || program.eligibleGrades.includes(user.grade);
+    const qualified = !program.eligibleGrades?.length || program.eligibleGrades.some((grade) => gradeMatches(user.grade, grade));
     const project = projectById(item.projectId);
     const competitionNames = (item.competitionIds || [])
       .map((id) => state.competitions.find((competition) => competition.id === id)?.name)
@@ -2066,7 +3073,7 @@
         <div>
             <div class="recruitment-title">
               <span class="avatar">${avatarMarkup(publisher)}</span>
-            <h4>${escapeHtml(match.program.name)}</h4>
+            <h4>${programLabelMarkup(match.program)}</h4>
             <span class="status-pill ${item.status}">${status}</span>
           </div>
           <p class="recruitment-subtitle">${escapeHtml(item.projectTitle || item.competitionSubtitle || "未命名项目")}</p>
@@ -2088,6 +3095,7 @@
         ${compactMode ? `<p class="recruitment-summary">${escapeHtml(item.requirement)}</p>` : ""}
         <div class="card-actions">
           <button class="ghost-button" type="button" data-resume="${item.publisherId}">预览简历</button>
+          ${match.project ? `<button class="ghost-button" type="button" data-project-preview="${escapeAttr(match.project.id)}">项目档案</button>` : ""}
           <button class="ghost-button" type="button" data-detail="${item.id}">详情</button>
           ${actionMarkup}
           <p class="next-step">${escapeHtml(action.next)}</p>
@@ -2135,7 +3143,7 @@
         (!programId || item.programId === programId) &&
         (!college || item.college.toLowerCase().includes(college)) &&
         (!status || item.status === status) &&
-        (!grade || item.grades?.includes(grade) || item.grades?.includes("不限")) &&
+        (!grade || item.grades?.some((value) => gradeMatches(value, grade)) || item.grades?.includes("不限")) &&
         tagMatch
       );
     });
@@ -2157,9 +3165,13 @@
     const match = explainMatch(item);
     const canApply = action.kind === "apply";
     const linkedCompetitions = match.competitionNames.length ? match.competitionNames.join("、") : item.competition || "未指定";
+    const project = match.project;
+    const projectMeta = project
+      ? `${programLabelMarkup(programById(project.programId))} · ${escapeHtml(project.source === "library" ? `项目库${project.libraryYear || ""}` : "自定义项目")} · ${escapeHtml(project.college || "未注明学院")}`
+      : "项目档案暂未关联";
     $("#detailContent").innerHTML = `
       <div class="dialog-content">
-        <span class="eyebrow">${escapeHtml(match.program.name)}</span>
+        <span class="eyebrow">${programLabelMarkup(match.program)}</span>
         <h3>${escapeHtml(item.projectTitle || item.competition)}</h3>
         <p class="recruitment-subtitle">关联竞赛：${escapeHtml(linkedCompetitions)}</p>
         <div class="recruitment-meta">
@@ -2175,12 +3187,17 @@
         </div>
         <p>${escapeHtml(item.summary)}</p>
         <p>${escapeHtml(item.requirement)}</p>
-        <div class="list-item">
-          <header><h5>项目简介</h5><button class="ghost-button" type="button" data-resume="${item.publisherId}">预览发布者简历</button></header>
-          <p>${escapeHtml(item.projectSummary || "暂未补充项目简介")}</p>
+        <div class="project-detail-card">
+          <header>
+            <div><h5>项目档案</h5><span class="file-meta">${projectMeta}</span></div>
+            ${project ? `<button class="ghost-button" type="button" data-project-preview="${escapeAttr(project.id)}">展开预览</button>` : ""}
+          </header>
+          <p>${escapeHtml(project?.summary || item.projectSummary || "暂未补充项目简介")}</p>
+          ${project?.advisor ? `<span class="file-meta">指导教师：${escapeHtml(project.advisor)}</span>` : ""}
         </div>
         <div class="list-item">
-          <header><h5>发布者</h5><span class="file-meta">${escapeHtml(publisher.campus)} · ${escapeHtml(publisher.college)}</span></header>
+          <header><h5>发布者</h5><button class="ghost-button" type="button" data-resume="${item.publisherId}">预览简历</button></header>
+          <p class="file-meta">${escapeHtml(publisher.campus)} · ${escapeHtml(publisher.college)}</p>
           <p>${escapeHtml(privacyLine(publisher, false))}</p>
         </div>
         <div class="list-item">
@@ -2197,6 +3214,45 @@
     `;
     $("#detailDialog").showModal();
     if (focusApply) $("#applicationMessage")?.focus();
+  }
+
+  function openProjectPreview(projectId) {
+    const project = projectById(projectId);
+    if (!project) return;
+    const program = programById(project.programId);
+    const linkedCompetitions = (state.projectCompetitionLinks || [])
+      .filter((link) => link.projectId === project.id)
+      .map((link) => state.competitions.find((competition) => competition.id === link.competitionId)?.name)
+      .filter(Boolean);
+    const relatedRecruitments = state.recruitments.filter((item) => item.projectId === project.id && item.status === "open").length;
+    const source = project.source === "library" ? `项目库${project.libraryYear ? ` · ${project.libraryYear}` : ""}` : "队伍自定义项目";
+    $("#detailContent").innerHTML = `
+      <div class="dialog-content project-preview-dialog">
+        <span class="eyebrow">项目详情预览</span>
+        <h3>${escapeHtml(project.title)}</h3>
+        <div class="project-preview-meta">
+          <span>${programLabelMarkup(program)}</span>
+          <span>${escapeHtml(source)}</span>
+          <span>${escapeHtml(project.college || "未注明学院")}</span>
+          <span>${relatedRecruitments} 个开放招募</span>
+        </div>
+        <section class="project-preview-section">
+          <h4>项目简介</h4>
+          <p>${escapeHtml(project.summary || "暂未补充项目简介")}</p>
+        </section>
+        <section class="project-preview-section">
+          <h4>可复用竞赛</h4>
+          <div class="card-tags">${linkedCompetitions.length ? linkedCompetitions.map((name) => `<span class="chip">${escapeHtml(name)}</span>`).join("") : `<span class="file-meta">暂未关联其他竞赛</span>`}</div>
+          <p class="file-meta">同一项目可以按年度和规则复用到后续竞赛，具体资格以当年通知为准。</p>
+        </section>
+        <section class="project-preview-section project-preview-facts">
+          <div><span>指导教师</span><strong>${escapeHtml(project.advisor || "未填写")}</strong></div>
+          <div><span>来源学院</span><strong>${escapeHtml(project.college || "未填写")}</strong></div>
+          <div><span>项目状态</span><strong>${project.active === false ? "已停用" : "可用"}</strong></div>
+        </section>
+      </div>
+    `;
+    if (!$("#detailDialog").open) $("#detailDialog").showModal();
   }
 
   function openResumePreview(userId) {
@@ -2242,7 +3298,7 @@
     if (!dialog.open) dialog.showModal();
   }
 
-  function submitApplication(recruitmentId) {
+  async function submitApplication(recruitmentId) {
     const item = state.recruitments.find((rec) => rec.id === recruitmentId);
     const message = $("#applicationMessage")?.value.trim();
     if (!item || !message) {
@@ -2250,7 +3306,7 @@
       return;
     }
     item.applications ||= [];
-    if (item.applications.some((app) => app.userId === CURRENT_USER_ID)) {
+    if (item.applications.some((app) => app.userId === CURRENT_USER_ID && app.status !== "rejected")) {
       toast("你已申请过该招募", "error");
       return;
     }
@@ -2258,22 +3314,23 @@
       toast(item.status !== "open" ? "该招募当前不可申请" : "队伍已满员，无法申请", "error");
       return;
     }
-    item.applications.push({
-      id: uid("app"),
-      userId: CURRENT_USER_ID,
-      message,
-      status: "pending",
-      createdAt: new Date().toISOString(),
-    });
-    addMessage("notification", "申请已提交", `你已申请加入 ${item.competition}。`);
-    saveState();
-    renderAll();
-    $("#detailDialog").close();
-    toast("申请已提交");
+    try {
+      await apiRequest(`/recruitments/${encodeURIComponent(recruitmentId)}/applications`, {
+        method: "POST",
+        body: JSON.stringify({ message }),
+      });
+      await refreshRemoteState();
+      $("#detailDialog").close();
+      toast("申请已提交");
+    } catch (error) {
+      toast(error.message || "申请提交失败", "error");
+    }
   }
 
   function renderProfile() {
     const user = currentUser();
+    renderProfileAvatar(user);
+    renderProfileStatus(user);
     $("#awardList").innerHTML = (user.awards || [])
       .map(
         (award) => `
@@ -2282,7 +3339,7 @@
               <h5>${escapeHtml(award.name)}</h5>
               <button class="ghost-button" type="button" data-delete-award="${award.id}">删除</button>
             </header>
-            <div class="file-meta">${escapeHtml(award.shortName || shortNameForAward(award.name))} · ${award.year || "未填年份"} · ${awardLevelText(award.level)} · ${roleText(award.role, award.solo)}</div>
+            <div class="file-meta">${escapeHtml(award.shortName || shortNameForAward(award.name))} · ${award.year || "未填年份"} · ${awardLevelText(award.level)} · ${roleText(award.role, award.solo)}${award.bonusType ? ` · ${bonusTypeText(award.bonusType)}` : ""}</div>
             <strong>${escapeHtml(awardText(award.award))}</strong>
           </div>
         `,
@@ -2291,23 +3348,53 @@
     renderAwardPreview();
   }
 
+  function renderProfileStatus(user) {
+    const readiness = profileReadiness(user);
+    const percent = Math.round((readiness.complete / readiness.total) * 100);
+    const label = $("#profileStatusLabel");
+    const fill = $("#profileStatusFill");
+    const hint = $("#profileStatusHint");
+    const missing = $("#profileStatusMissing");
+    if (label) label.textContent = readiness.label;
+    if (fill) fill.style.width = `${percent}%`;
+    if (hint) hint.textContent = readiness.ready ? "档案已达到申请门槛，可以进入找队伍。" : "补齐必填信息后，匹配解释会更准确。";
+    if (missing) missing.textContent = readiness.missing.length ? readiness.missing.join("、") : "无";
+  }
+
+  function renderProfileAvatar(user) {
+    const preview = $("#profileAvatarPreview");
+    const displayUser = pendingAvatarDataUrl ? { ...user, avatar: pendingAvatarDataUrl } : user;
+    if (preview) preview.innerHTML = avatarMarkup(displayUser);
+    const meta = $("#profileAvatarMeta");
+    if (meta) meta.textContent = pendingAvatarDataUrl
+      ? "已裁剪为 256×256，保存档案后生效"
+      : user.avatar
+        ? "已保存头像（256×256），可重新选择"
+        : "未选择头像";
+  }
+
   function populateProfileForm() {
     const form = $("#profileForm");
     const user = currentUser();
     Object.entries(user).forEach(([key, value]) => {
       const field = form.elements[key];
-      if (!field || key === "tags") return;
+      if (!field || key === "tags" || key === "contacts") return;
       field.value = value ?? "";
     });
-    setMultiValues(form.elements.tags, user.tags || []);
-    setChecklistValues("profileTagChecklist", user.tags || []);
+    const visibility = $("#realNameVisibilityToggle");
+    if (visibility) visibility.checked = user.realNameVisibility === "public" || user.realNameVisibility === "matched";
+    renderNameVisibilitySwitch();
+    renderGradeCohortOptions();
+    renderContactRows(user.contacts || []);
+    renderProfileTagPicker($("#profileTagSearch")?.value || "");
+    updateComputedGrade();
   }
 
   function renderMine() {
     const mine = state.recruitments.filter((item) => item.publisherId === CURRENT_USER_ID);
     $("#myRecruitments").innerHTML = mine.length
       ? mine.map(myRecruitmentRow).join("")
-      : `<div class="list-item"><h5>还没有发布招募</h5></div>`;
+      : `<div class="empty-state"><strong>还没有发布招募</strong><p>发布一个项目后，队长可以在这里查看申请和队伍状态。</p><button class="ghost-button" type="button" data-view-jump="publish" data-step-jump="review">去发布招募</button></div>`;
     const reviews = mine.flatMap((item) =>
       (item.applications || []).map((app) => ({
         recruitment: item,
@@ -2315,9 +3402,29 @@
         user: userById(app.userId),
       })),
     );
+    renderReviewSummary(mine, reviews);
     $("#applicationReview").innerHTML = reviews.length
       ? reviews.map(applicationRow).join("")
-      : `<div class="list-item"><h5>暂无申请</h5></div>`;
+      : `<div class="empty-state"><strong>暂无待处理申请</strong><p>${currentRole() === "captain" ? "新申请会出现在这里，先查看简历和申请留言。" : "切换到队长身份后，这里会显示你的审核任务。"}</p></div>`;
+  }
+
+  function renderReviewSummary(mine, reviews) {
+    const pending = reviews.filter(({ application }) => application.status === "pending").length;
+    const accepted = reviews.filter(({ application }) => application.status === "accepted").length;
+    const open = mine.filter((item) => item.status === "open").length;
+    const captain = currentRole() === "captain";
+    $("#reviewSummary").innerHTML = `
+      <div class="review-summary-main">
+        <span class="eyebrow">队长待办</span>
+        <strong>${pending ? `${pending} 份申请待处理` : "当前没有待处理申请"}</strong>
+        <p>${captain ? "先看能力标签和简历预览，再决定是否通过；通过后双方才会看到允许公开的联系方式。" : "当前是申请者身份。切换到队长后，待处理申请会显示通过和拒绝按钮。"}</p>
+      </div>
+      <div class="review-summary-stats" aria-label="审核统计">
+        <div><span>开放招募</span><strong>${open}</strong></div>
+        <div><span>待处理</span><strong>${pending}</strong></div>
+        <div><span>已通过</span><strong>${accepted}</strong></div>
+      </div>
+    `;
   }
 
   function myRecruitmentRow(item) {
@@ -2328,7 +3435,7 @@
           <h5>${escapeHtml(item.projectTitle || item.competition)}</h5>
           <span class="status-pill ${item.status}">${statusText(item.status)}</span>
         </header>
-        <p class="file-meta">${escapeHtml(programById(item.programId).name)} · ${escapeHtml(item.campus)} · ${item.current}/${item.total} 人 · 待审 ${pending} · 截止 ${formatTime(item.deadline)}</p>
+        <p class="file-meta">${programLabelMarkup(programById(item.programId))} · ${escapeHtml(item.campus)} · ${item.current}/${item.total} 人 · 待审 ${pending} · 截止 ${formatTime(item.deadline)}</p>
         <div class="item-actions">
           <button class="ghost-button" type="button" data-detail="${item.id}">查看详情</button>
           <button class="ghost-button danger" type="button" data-close-recruitment="${item.id}" ${item.status !== "open" ? "disabled" : ""}>关闭招募</button>
@@ -2350,7 +3457,7 @@
         <div class="card-tags">${(user.tags || []).map((tag) => `<span class="chip">${escapeHtml(tag)}</span>`).join("")}</div>
         <button class="ghost-button" type="button" data-resume="${user.id}">预览简历</button>
         <p>${escapeHtml(application.message)}</p>
-        <p class="file-meta">${escapeHtml(privacyLine(user, isAccepted))}</p>
+        <p class="file-meta">${escapeHtml(isAccepted ? releasedContactFor(recruitment) || privacyLine(user, true) : privacyLine(user, false))}</p>
         ${
           canReview
             ? `<div class="item-actions">
@@ -2365,37 +3472,29 @@
     `;
   }
 
-  function reviewApplication(applicationId, approve) {
-    for (const recruitment of state.recruitments) {
-      const app = (recruitment.applications || []).find((item) => item.id === applicationId);
-      if (!app) continue;
-      if (app.status !== "pending") {
-        toast("该申请已经处理过", "error");
+  async function reviewApplication(applicationId, approve) {
+    const found = state.recruitments
+      .flatMap((item) => (item.applications || []).map((application) => ({ recruitment: item, application })))
+      .find((entry) => entry.application.id === applicationId);
+    if (approve && found) {
+      if (found.recruitment.status !== "open") {
+        toast(found.recruitment.status === "expired" ? "该招募已截止，不能通过申请" : "该招募已关闭，不能通过申请", "error");
         return;
       }
-      if (approve && remainingSlots(recruitment) <= 0) {
+      if (remainingSlots(found.recruitment) <= 0) {
         toast("队伍已满员，不能继续通过申请", "error");
         return;
       }
-      app.status = approve ? "accepted" : "rejected";
-      app.reviewedAt = new Date().toISOString();
-      const applicant = userById(app.userId);
-      if (approve) {
-        recruitment.current = Math.min(recruitment.total, recruitment.current + 1);
-        addMessage(
-          "conversation",
-          `${applicant.nickname} · ${recruitment.competition}`,
-          `申请已通过，双方可根据隐私设置查看联系方式。`,
-          contactCard(applicant, currentUser()),
-        );
-        addMessage("notification", "申请已通过", `${applicant.nickname} 已加入 ${recruitment.competition}。`);
-      } else {
-        addMessage("notification", "申请已拒绝", `${applicant.nickname} 的申请已拒绝。`);
-      }
-      saveState();
-      renderAll();
+    }
+    try {
+      await apiRequest("/applications/" + encodeURIComponent(applicationId), {
+        method: "PATCH",
+        body: JSON.stringify({ status: approve ? "accepted" : "rejected" }),
+      });
+      await refreshRemoteState();
       toast(approve ? "申请已通过" : "申请已拒绝");
-      return;
+    } catch (error) {
+      toast(error.message || "审核操作失败", "error");
     }
   }
 
@@ -2409,11 +3508,19 @@
     const conversations = [...state.conversations].sort((a, b) => Number(Boolean(b.contact)) - Number(Boolean(a.contact)));
     $("#notificationList").innerHTML =
       applications.length || state.messages.length
-        ? `${applicationGroup("待审核", pendingApps)}${applicationGroup("已通过", acceptedApps)}${applicationGroup("已拒绝", rejectedApps)}${messageGroup("系统通知", otherMessages)}`
-        : `<div class="list-item"><h5>还没有申请记录</h5><p class="file-meta">从“找队伍”选择一条匹配原因清晰的招募开始。</p></div>`;
+         ? `${applicationSummaryMarkup(pendingApps.length, acceptedApps.length, rejectedApps.length)}${applicationGroup("待审核", pendingApps)}${applicationGroup("匹配完成", acceptedApps)}${applicationGroup("已拒绝", rejectedApps)}${messageGroup("系统通知", otherMessages)}`
+        : `<div class="empty-state"><strong>还没有申请记录</strong><p>从“找队伍”选择一条匹配原因清晰的招募开始，提交后进度会在这里持续更新。</p><button class="ghost-button" type="button" data-view-jump="discover" data-step-jump="discover">去找队伍</button></div>`;
     $("#conversationList").innerHTML = conversations.length
       ? `${messageGroup("联系方式卡片", conversations.filter((item) => item.contact), conversationRow)}${messageGroup("站内对话", conversations.filter((item) => !item.contact), conversationRow)}`
       : `<div class="list-item"><h5>暂无站内对话</h5></div>`;
+  }
+
+  function applicationSummaryMarkup(pending, accepted, rejected) {
+    return `<div class="application-summary" aria-label="申请状态统计">
+      <div><span>待审核</span><strong>${pending}</strong></div>
+      <div><span>已匹配</span><strong>${accepted}</strong></div>
+      <div><span>已拒绝</span><strong>${rejected}</strong></div>
+    </div>`;
   }
 
   function applicationGroup(title, items) {
@@ -2425,6 +3532,7 @@
     const publisher = userById(recruitment.publisherId);
     const status = applicationStatus(application.status);
     const contactReady = application.status === "accepted";
+    const contact = contactReady ? releasedContactFor(recruitment) : "";
     return `
       <article class="list-item progress-row">
         <header>
@@ -2432,10 +3540,32 @@
           <span class="status-pill ${application.status === "pending" ? "open" : application.status === "accepted" ? "open" : "closed"}">${status}</span>
         </header>
         <p>${escapeHtml(application.message || "未填写留言")}</p>
-        <p class="file-meta">${escapeHtml(programById(recruitment.programId).name)} · ${escapeHtml(recruitment.campus)} · 队长 ${escapeHtml(publisher.nickname)} · ${formatTime(application.createdAt)}</p>
-        <p class="file-meta">${contactReady ? "已通过后可查看双方隐私设置允许的联系方式。" : application.status === "pending" ? "队长尚未处理，暂不释放联系方式。" : "该申请未通过，联系方式不会释放。"}</p>
+        <p class="file-meta">${programLabelMarkup(programById(recruitment.programId))} · ${escapeHtml(recruitment.campus)} · 队长 ${escapeHtml(publisher.nickname)} · ${formatTime(application.createdAt)}</p>
+        ${applicationTimelineMarkup(application)}
+        <p class="file-meta">${contactReady ? "匹配已完成，平台只负责保留队伍关系；请自行建立群聊。" : application.status === "pending" ? "队长尚未处理，暂不释放联系方式。" : "该申请未通过，联系方式不会释放。若招募仍开放，可以再次申请。"}</p>
+        <div class="item-actions">
+          <button class="${application.status === "rejected" && recruitment.status === "open" ? "primary-button" : "ghost-button"}" type="button" data-detail="${recruitment.id}">${application.status === "rejected" && recruitment.status === "open" ? "再次申请" : "查看招募"}</button>
+          ${contactReady && contact ? `<button class="ghost-button" type="button" data-copy-contact="${escapeAttr(contact)}">复制联系方式</button>` : ""}
+        </div>
       </article>
     `;
+  }
+
+  function applicationTimelineMarkup(application) {
+    const reviewed = application.status !== "pending";
+    const accepted = application.status === "accepted";
+    const rejected = application.status === "rejected";
+    const step = (number, label, detail, stateClass) => `
+      <div class="timeline-step ${stateClass}">
+        <span>${number}</span>
+        <div><strong>${escapeHtml(label)}</strong><small>${escapeHtml(detail)}</small></div>
+      </div>`;
+    return `<div class="application-timeline" aria-label="申请进度">
+      ${step("01", "已提交", formatTime(application.createdAt), "done")}
+      ${step("02", "队长审核", reviewed ? formatTime(application.reviewedAt) : "等待队长处理", reviewed ? "done" : "current")}
+      ${step("03", accepted ? "已通过" : rejected ? "未通过" : "审核结果", accepted ? "可以进入匹配完成" : rejected ? "联系方式不会释放" : "处理后显示结果", accepted ? "done" : rejected ? "blocked" : "pending")}
+      ${step("04", "匹配完成", accepted ? "请自行建立群聊，平台流程到此结束" : "通过后开放联系方式", accepted ? "done" : "pending")}
+    </div>`;
   }
 
   function messageGroup(title, items, renderer = messageRow) {
@@ -2470,226 +3600,6 @@
     `;
   }
 
-  function renderCollaboration() {
-    const matches = collaborationMatches();
-    const doneCount = matches.filter((match) => collaborationTasks(match).every((task) => task.done)).length;
-    const meetingCount = matches.filter((match) => Boolean(collaborationRecord(match.key).meetingAt)).length;
-    $("#collaborationStats").innerHTML = [
-      ["已匹配", matches.length],
-      ["清单完成", doneCount],
-      ["已约同步", meetingCount],
-    ]
-      .map(([label, value]) => `<div class="collab-stat"><span>${label}</span><strong>${value}</strong></div>`)
-      .join("");
-    $("#collaborationList").innerHTML = matches.length
-      ? matches.map(collaborationCard).join("")
-      : `<div class="list-item collab-empty">
-          <h5>还没有可协作的匹配</h5>
-          <p class="file-meta">申请通过后，联系方式、第一次同步和资料补齐会自动进入这里。</p>
-          <button class="primary-button" type="button" data-view-jump="discover" data-step-jump="discover">去找队伍</button>
-        </div>`;
-    renderCollaborationFiles();
-  }
-
-  function collaborationMatches() {
-    const matches = [];
-    state.recruitments.forEach((recruitment) => {
-      (recruitment.applications || [])
-        .filter((application) => application.status === "accepted")
-        .forEach((application) => {
-          if (application.userId === CURRENT_USER_ID && recruitment.publisherId !== CURRENT_USER_ID) {
-            matches.push({
-              key: collaborationKey(recruitment, application),
-              mode: "applicant",
-              roleLabel: "申请者视角",
-              recruitment,
-              application,
-              counterpart: userById(recruitment.publisherId),
-            });
-          }
-          if (recruitment.publisherId === CURRENT_USER_ID && application.userId !== CURRENT_USER_ID) {
-            matches.push({
-              key: collaborationKey(recruitment, application),
-              mode: "captain",
-              roleLabel: "队长视角",
-              recruitment,
-              application,
-              counterpart: userById(application.userId),
-            });
-          }
-        });
-    });
-    return matches.sort((a, b) => new Date(b.application.reviewedAt || b.application.createdAt) - new Date(a.application.reviewedAt || a.application.createdAt));
-  }
-
-  function collaborationCard(match) {
-    const { recruitment, application, counterpart } = match;
-    const record = collaborationRecord(match.key);
-    const tasks = collaborationTasks(match);
-    const done = tasks.filter((task) => task.done).length;
-    const nextTask = tasks.find((task) => !task.done);
-    const contact = collaborationContact(match);
-    const firstMessage = application.message || "未填写申请留言";
-    const noteValue = Object.prototype.hasOwnProperty.call(record, "note") ? record.note : firstMessage;
-    return `
-      <article class="collab-card">
-        <header class="collab-card-head">
-          <div>
-            <span class="eyebrow">${escapeHtml(match.roleLabel)}</span>
-            <h4>${escapeHtml(recruitment.projectTitle || recruitment.competition)}</h4>
-            <p>${escapeHtml(programById(recruitment.programId).name)} · ${escapeHtml(recruitment.competition || "未指定竞赛")}</p>
-          </div>
-          <span class="status-pill open">协作中 ${done}/${tasks.length}</span>
-        </header>
-        <div class="collab-meta">
-          <span>对接人：${escapeHtml(counterpart.nickname)}</span>
-          <span>${escapeHtml(counterpart.campus)} · ${escapeHtml(counterpart.college)}</span>
-          <span>通过时间：${formatTime(application.reviewedAt || application.createdAt)}</span>
-        </div>
-        <div class="collab-contact">
-          <div>
-            <strong>联系卡</strong>
-            <p>${escapeHtml(contact)}</p>
-          </div>
-          <button class="ghost-button" type="button" data-copy-collab-contact="${escapeAttr(contact)}">复制联系卡</button>
-        </div>
-        <div class="collab-next">
-          <strong>${nextTask ? `下一步：${nextTask.label}` : "协作清单已完成"}</strong>
-          <span>${nextTask ? nextTask.hint : "可以继续补充资料或在备注里记录后续安排。"}</span>
-        </div>
-        <div class="collab-task-list">
-          ${tasks
-            .map(
-              (task) => `
-                <label class="collab-task ${task.done ? "done" : ""}">
-                  <input
-                    type="checkbox"
-                    data-collab-key="${escapeAttr(match.key)}"
-                    data-collab-task="${escapeAttr(task.id)}"
-                    ${task.done ? "checked" : ""}
-                  />
-                  <span>
-                    <strong>${escapeHtml(task.label)}</strong>
-                    <small>${escapeHtml(task.hint)}</small>
-                  </span>
-                </label>
-              `,
-            )
-            .join("")}
-        </div>
-        <div class="collab-form-row">
-          <label>
-            <span>第一次同步时间</span>
-            <input type="datetime-local" value="${escapeAttr(toDatetimeLocal(record.meetingAt))}" data-collab-key="${escapeAttr(match.key)}" data-collab-meeting />
-          </label>
-          <label>
-            <span>协作备注</span>
-            <textarea rows="3" data-collab-key="${escapeAttr(match.key)}" data-collab-note placeholder="记录分工、会议结论或材料缺口">${escapeHtml(noteValue || "")}</textarea>
-          </label>
-        </div>
-        <div class="item-actions">
-          <button class="ghost-button" type="button" data-detail="${recruitment.id}">查看招募详情</button>
-          <button class="ghost-button" type="button" data-open-collab-files>打开资料库</button>
-        </div>
-      </article>
-    `;
-  }
-
-  function collaborationTasks(match) {
-    const record = collaborationRecord(match.key);
-    const checked = new Set(record.checked || []);
-    const hasMeeting = Boolean(record.meetingAt);
-    return [
-      {
-        id: "contact",
-        label: "确认双方联系方式",
-        hint: "复制联系卡后在微信、QQ 或线下渠道完成确认。",
-        done: checked.has("contact"),
-      },
-      {
-        id: "role",
-        label: "明确分工与投入",
-        hint: match.mode === "captain" ? "告诉新成员负责范围、周投入和验收物。" : "向队长确认你承担的模块和每周投入。",
-        done: checked.has("role"),
-      },
-      {
-        id: "meeting",
-        label: "约第一次同步",
-        hint: hasMeeting ? `已约 ${formatTime(record.meetingAt)}` : "建议 24 小时内完成第一次同步。",
-        done: checked.has("meeting") || hasMeeting,
-      },
-      {
-        id: "materials",
-        label: "补齐申报/答辩材料",
-        hint: "把需求、分工、附件和截止风险整理到可交付清单。",
-        done: checked.has("materials"),
-      },
-    ];
-  }
-
-  function renderCollaborationFiles() {
-    const files = state.files.filter((file) => file.scope === "collaboration" || file.scope === "recruitment");
-    $("#collaborationFileList").innerHTML = files.length
-      ? files
-          .slice(0, 5)
-          .map(
-            (file) => `
-              <article class="list-item">
-                <header><h5>${escapeHtml(file.name)}</h5><span class="file-meta">${formatBytes(file.size)}</span></header>
-                <p class="file-meta">${escapeHtml(scopeText(file.scope))} · ${formatTime(file.createdAt)}</p>
-              </article>
-            `,
-          )
-          .join("")
-      : `<div class="list-item">
-          <h5>暂无协作资料</h5>
-          <p class="file-meta">在文件与备份中把附件归档为“协作资料”后会显示在这里。</p>
-          <button class="ghost-button" type="button" data-open-collab-files>打开文件与备份</button>
-        </div>`;
-  }
-
-  function collaborationKey(recruitment, application) {
-    return `${recruitment.id}:${application.userId}`;
-  }
-
-  function collaborationRecord(key) {
-    return state.collaboration?.[key] || { checked: [], note: "", meetingAt: "" };
-  }
-
-  function ensureCollaborationRecord(key) {
-    state.collaboration ||= {};
-    state.collaboration[key] ||= { checked: [], note: "", meetingAt: "" };
-    state.collaboration[key].checked ||= [];
-    return state.collaboration[key];
-  }
-
-  function updateCollaborationTask(key, taskId, checked) {
-    const record = ensureCollaborationRecord(key);
-    const tasks = new Set(record.checked || []);
-    if (checked) tasks.add(taskId);
-    else tasks.delete(taskId);
-    record.checked = Array.from(tasks);
-    record.updatedAt = new Date().toISOString();
-    saveState();
-    renderCollaboration();
-  }
-
-  function updateCollaborationField(key, field, value, persist = true) {
-    const record = ensureCollaborationRecord(key);
-    record[field] = field === "meetingAt" && value ? new Date(value).toISOString() : value;
-    record.updatedAt = new Date().toISOString();
-    if (persist) {
-      saveState();
-      renderCollaboration();
-    }
-  }
-
-  function collaborationContact(match) {
-    const applicant = match.mode === "applicant" ? currentUser() : match.counterpart;
-    const publisher = match.mode === "applicant" ? match.counterpart : currentUser();
-    return contactCard(applicant, publisher);
-  }
-
   function renderAdmin() {
     $("#adminTags").innerHTML = state.tags
       .map((tag) => `<span class="chip">${escapeHtml(tag.name)} <button type="button" class="ghost-button" data-delete-tag="${tag.id}">删</button></span>`)
@@ -2698,8 +3608,12 @@
       .map(
         (item) => `
           <div class="list-item">
-            <header><h5>${escapeHtml(item.name)}</h5><button class="ghost-button" type="button" data-delete-competition="${item.id}">删除</button></header>
-            <span class="file-meta">${escapeHtml(item.level)}级</span>
+            <header><h5>${escapeHtml(item.name)}</h5><button class="ghost-button" type="button" data-delete-competition="${item.id}">停用</button></header>
+            <span class="file-meta">${escapeHtml(item.level)} · 别名：${escapeHtml((item.aliases || []).join("、") || "未设置")}${item.bonusType ? ` · ${escapeHtml(bonusTypeText(item.bonusType))}` : ""}</span>
+            <div class="item-actions">
+              <button class="ghost-button" type="button" data-edit-competition="${item.id}">维护别名</button>
+              <button class="ghost-button" type="button" data-merge-competition="${item.id}">合并重复项</button>
+            </div>
           </div>
         `,
       )
@@ -2711,7 +3625,7 @@
             (project) => `
               <div class="list-item">
                 <header><h5>${escapeHtml(project.title)}</h5><button class="ghost-button danger" type="button" data-delete-project="${project.id}">停用</button></header>
-                <span class="file-meta">${escapeHtml(programById(project.programId).name)} · ${escapeHtml(project.source === "library" ? "项目库" : "自定义")}</span>
+                <span class="file-meta">${programLabelMarkup(programById(project.programId))} · ${escapeHtml(project.source === "library" ? "项目库" : "自定义")}</span>
               </div>
             `,
           )
@@ -2821,7 +3735,7 @@
 
   function exportData() {
     downloadJson(state, `hiteam-backup-${safeDate()}.json`);
-    toast("备份已生成");
+    toast("当前账号快照已生成");
   }
 
   function importData(event) {
@@ -2837,11 +3751,20 @@
           toast(summary.reason, "error");
           return;
         }
-        if (!confirm(`导入 ${summary.recruitments} 条招募、${summary.drafts} 个草稿、${summary.users} 个用户，继续吗？`)) return;
-        state = ensureStateShape(parsed);
+        if (!confirm(`导入 ${summary.files} 个本地文件和界面缓存吗？服务器上的 ${summary.recruitments} 条招募、${summary.drafts} 个草稿、${summary.users} 个用户不会被覆盖。`)) return;
+        const imported = ensureStateShape(parsed, currentUser());
+        state = ensureStateShape(
+          {
+            ...state,
+            ui: imported.ui,
+            files: imported.files,
+            reports: imported.reports,
+          },
+          currentUser(),
+        );
         saveState();
         renderAll();
-        toast("JSON 已导入");
+        toast("本地缓存已导入，服务器业务数据未覆盖");
       } catch {
         $("#importPreview").innerHTML = `<div class="list-item"><h5>导入失败</h5><p class="file-meta">JSON 无法解析</p></div>`;
         toast("导入失败，JSON 无法解析", "error");
@@ -2875,6 +3798,7 @@
       <div class="list-item">
         <h5>导入校验通过</h5>
         <p class="file-meta">版本 ${escapeHtml(summary.version)} · 招募 ${summary.recruitments} · 草稿 ${summary.drafts} · 用户 ${summary.users} · 文件 ${summary.files}</p>
+        <p class="file-meta">确认后只恢复本地缓存与附件，服务器上的招募、申请、消息和草稿不会被覆盖。</p>
       </div>
     `;
   }
@@ -2932,7 +3856,11 @@
   }
 
   function currentUser() {
-    return state.users.find((user) => user.id === CURRENT_USER_ID) || state.users[0];
+    return (
+      state.users.find((user) => user.id === CURRENT_USER_ID) ||
+      state.users[0] ||
+      normalizeAuthUser({ id: CURRENT_USER_ID, nickname: "未登录" })
+    );
   }
 
   function userById(id) {
@@ -2941,7 +3869,7 @@
 
   function privacyLine(user, matched) {
     const realName = canReveal(user.realNameVisibility, matched) ? user.realName || "未填姓名" : "姓名隐藏";
-    const contact = canReveal(user.contactVisibility, matched) ? user.contact || "未填联系方式" : "联系方式隐藏";
+    const contact = canReveal(user.contactVisibility, matched) ? contactSummary(user.contacts || [], user.contact) || "未填联系方式" : "联系方式隐藏";
     return `${realName} · ${contact}`;
   }
 
@@ -2951,8 +3879,12 @@
     return false;
   }
 
-  function contactCard(applicant, publisher) {
-    return `${applicant.nickname}: ${privacyLine(applicant, true)} | ${publisher.nickname}: ${privacyLine(publisher, true)}`;
+  function releasedContactFor(recruitment) {
+    const marker = String(recruitment?.projectTitle || recruitment?.competition || "").trim();
+    const match = (state.conversations || []).find(
+      (item) => item.contact && (!marker || String(item.title || "").includes(marker)),
+    );
+    return match?.contact || "";
   }
 
   function avatarMarkup(user) {
@@ -2973,7 +3905,11 @@
   }
 
   function awardLevelText(level) {
-    return { national: "国家级", provincial: "省级", school: "校级" }[level] || level;
+    return { national_recommendation: "国家级-保研加分", national: "国家级", provincial: "省级", school: "校级" }[level] || level;
+  }
+
+  function bonusTypeText(type) {
+    return { lower_grade: "降等加分", no_lower_grade: "不降等加分" }[type] || type;
   }
 
   function roleText(role, solo = false) {
@@ -3059,17 +3995,8 @@
     }).format(date);
   }
 
-  function toDatetimeLocal(value) {
-    if (!value) return "";
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "";
-    const offset = date.getTimezoneOffset();
-    const local = new Date(date.getTime() - offset * 60000);
-    return local.toISOString().slice(0, 16);
-  }
-
   function scopeText(scope) {
-    return { profile: "个人档案", recruitment: "招募材料", collaboration: "协作资料", admin: "管理资料" }[scope] || scope;
+    return { profile: "个人档案", recruitment: "招募材料", admin: "管理资料" }[scope] || scope;
   }
 
   function formatBytes(size) {

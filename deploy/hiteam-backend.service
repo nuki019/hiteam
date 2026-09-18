@@ -1,0 +1,18 @@
+[Unit]
+Description=HiTeam authentication backend
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/www/hiteam
+ExecStart=/usr/bin/python3 /var/www/hiteam/backend/server.py
+Environment=HITEAM_HOST=127.0.0.1
+Environment=HITEAM_PORT=8787
+Environment=HITEAM_DB_PATH=/var/lib/hiteam/hiteam.db
+Restart=on-failure
+RestartSec=3
+User=nginx
+Group=nginx
+
+[Install]
+WantedBy=multi-user.target
