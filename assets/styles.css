@@ -4934,8 +4934,13 @@ textarea {
   gap: 8px;
 }
 
-.donate-icon {
+.donate-icon,
+.star-icon {
   font-size: 16px;
+}
+
+a.star-icon {
+  color: inherit;
 }
 
 .donate-card {
