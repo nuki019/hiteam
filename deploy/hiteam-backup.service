@@ -1,0 +1,9 @@
+[Unit]
+Description=HiTeam SQLite daily backup
+
+[Service]
+Type=oneshot
+User=hiteam
+Group=hiteam
+# The backup script must be 750 root:hiteam so this user can execute it.
+ExecStart=/usr/local/sbin/hiteam-backup

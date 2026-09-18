@@ -7,12 +7,16 @@ Type=simple
 WorkingDirectory=/var/www/hiteam
 ExecStart=/usr/bin/python3 /var/www/hiteam/backend/server.py
 Environment=HITEAM_HOST=127.0.0.1
-Environment=HITEAM_PORT=8787
+Environment=HITEAM_PORT=8788
 Environment=HITEAM_DB_PATH=/var/lib/hiteam/hiteam.db
+Environment=HITEAM_FRONTEND_URL=https://hiteam.xyz/index.html
+Environment=HITEAM_ALLOWED_ORIGINS=https://hiteam.xyz,https://www.hiteam.xyz
+Environment=HITEAM_EMAIL_SUFFIX=@stu.hit.edu.cn
+EnvironmentFile=/etc/hiteam/secrets.env
 Restart=on-failure
 RestartSec=3
-User=nginx
-Group=nginx
+User=hiteam
+Group=hiteam
 
 [Install]
 WantedBy=multi-user.target

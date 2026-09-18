@@ -1,7 +1,12 @@
 (() => {
   const STORAGE_KEY = "hiteam.auth.v1";
   const LEGACY_STORAGE_KEYS = ["hiteam.v2.prototype", "hiteam.v2.publishDraft"];
-  const API_BASE = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "http://127.0.0.1:8787/api" : "/api";
+  const pagePort = window.location.port;
+  const localSplitDev =
+    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") &&
+    (pagePort === "8765" || pagePort === "4173");
+  const EMAIL_SUFFIX = "@stu.hit.edu.cn";
+  const API_BASE = localSplitDev ? "http://127.0.0.1:8787/api" : "/api";
   let CURRENT_USER_ID = "";
   const GRADE_OPTIONS = ["大一", "大二", "大三", "大四", "硕士", "博士"];
   const DEGREE_LABELS = { bachelor: "本科", master: "硕士", doctor: "博士" };
@@ -9,11 +14,12 @@
   const DEFAULT_UI = {
     role: "applicant",
     taskStep: "profile",
+    queueTab: "",
     advancedOpen: false,
     theme: "light",
     draftsMigrated: false,
   };
-  const ROLE_LABELS = { applicant: "申请者", captain: "队长", admin: "系统管理员", creator: "平台创建者" };
+  const ROLE_LABELS = { applicant: "队员", captain: "队长", admin: "管理员", creator: "创建者" };
   const PROGRAMS = {
     general_competition: {
       id: "general_competition",
@@ -25,42 +31,95 @@
       id: "annual_project",
       name: "大一年度项目",
       eligibleGrades: ["大一"],
-      note: "年度项目仅限大一；项目库是可选来源，人数由项目自行约定。",
+      note: "年度项目仅限大一。项目库题目只是参考，可与指导教师共同拟定新题目，联系的指导教师也可以不是项目库里的老师。",
     },
     innovation_training: {
       id: "innovation_training",
       name: "大创计划",
       eligibleGrades: ["大二", "大三"],
-      note: "大创计划面向大二、大三；项目库是可搜索来源，可关联多个竞赛。",
+      note: "大创计划面向大二、大三。项目库里联系指导老师，项目库里的题目只是一个参考，同学们可以跟指导教师共同拟定新的题目，联系的指导教师也可以不是项目库里的老师。",
     },
   };
   const PROGRAM_TERM_HELP = {
     innovation_training: {
-      definition: "“大创”是“大学生创新创业训练计划”的简称。这里的“大创计划”指学校组织的创新训练、创业训练或创业实践项目，具体要求以学校通知为准。",
+      definition: "“大创”是“大学生创新创业训练计划”的简称。这里的“大创计划”指学校组织的创新训练、创业训练或创业实践项目，具体要求以学校通知为准。项目库题目只是参考，不是最终立项清单；同学可与指导教师共同拟定新题目，联系的指导教师也可以不是项目库里的老师。",
     },
   };
-  const STEP_VIEW = { profile: "profile", discover: "discover", apply: "messages", review: "mine", advanced: "admin" };
+  const BONUS_TYPE_LABELS = {
+    "": "无加分",
+    default: "默认按学校等级分值",
+    extra_bonus: "另有高水平赛事额外加分",
+    special_as_first: "特等奖和一等奖均按一等奖加分",
+    lower_grade: "降等加分",
+    lower_grade_no_third: "一、二等奖降等，三等奖不加分",
+    year_meeting: "年会获奖按国家一等，入围参会按国家二等",
+    final_only: "仅决赛获奖加分",
+    track_specific: "分赛道规则",
+    mcm_mapped: "美赛等级折算",
+    architecture_mapped: "建筑类赛项折算",
+    mapped_medal: "金银铜按一二三等奖",
+    weihai_supplement: "按哈工大（威海）补充说明",
+    no_lower_grade: "不降等加分",
+  };
+  const AWARD_KIND_LABELS = {
+    competition: "竞赛",
+    paper: "论文",
+    patent: "专利",
+    software: "软著",
+    scholarship: "奖学金",
+  };
+  const PAPER_VENUE_LABELS = {
+    cas_sci_q1: "中科院 SCI 一区",
+    cas_sci_q2: "中科院 SCI 二区",
+    cas_sci_q3: "中科院 SCI 三区",
+    cas_sci_q4: "中科院 SCI 四区",
+    ei_journal: "EI 期刊",
+    ei_conference: "EI 会议",
+    ccf_a: "CCF A",
+    ccf_b: "CCF B",
+    ccf_c: "CCF C",
+    cscd: "CSCD",
+    pku_core: "北大核心",
+    sci_tech_core: "科技核心",
+    other_published: "其他正式发表",
+    preprint: "预印本或在投",
+    sci_q1: "SCI 一区",
+    sci_q2: "SCI 二区",
+    sci_q3: "SCI 三区",
+    sci_q4: "SCI 四区",
+  };
+  const SCHOLARSHIP_TYPE_LABELS = {
+    national: "国家奖学金",
+    people_first: "人民奖学金一等",
+    people_second: "人民奖学金二等",
+    people_third: "人民奖学金三等",
+    other: "其他奖学金",
+  };
+  const PROJECT_LIBRARY_NOTE = "项目库里联系指导老师，项目库里的题目只是一个参考，同学们可以跟指导教师共同拟定新的题目，联系的指导教师也可以不是项目库里的老师。";
+  const STEP_VIEW = { profile: "profile", discover: "discover", apply: "queue", advanced: "admin" };
   const VIEW_STEP = {
     profile: "profile",
     discover: "discover",
-    publish: "review",
-    mine: "review",
+    publish: "discover",
+    queue: "apply",
     messages: "apply",
+    mine: "apply",
     admin: "advanced",
-    files: "advanced",
+    bonus: "bonus",
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
   const viewMeta = {
-    discover: ["Step 02", "找队伍"],
-    publish: ["Captain", "发布招募"],
+    discover: ["Step 02", "寻找队伍"],
+    publish: ["Step 02", "发布招募"],
     profile: ["Step 01", "完善档案"],
-    mine: ["Step 04", "队长审核"],
-    messages: ["Step 03", "申请进度中心"],
+    queue: ["Step 03", "申请与审核"],
+    mine: ["Step 03", "申请与审核"],
+    messages: ["Step 03", "申请与审核"],
     admin: ["00", "管理后台"],
-    files: ["00", "文件与备份"],
+    bonus: ["Guide", "竞赛名册"],
   };
 
   let activeDraftId = null;
@@ -78,19 +137,26 @@
   let awardCompetitionActiveIndex = 0;
   let profileTagMenuOpen = false;
   let awardCompetitionMenuOpen = false;
+  let bonusFilter = "all";
+  let adminTab = "projects";
+  let adminProjectPage = 1;
+  let adminCompetitionPage = 1;
+  let adminTagPage = 1;
+  const ADMIN_PAGE_SIZE = 30;
 
   document.addEventListener("DOMContentLoaded", init);
 
   async function init() {
     clearLegacyStorage();
     bindAuth();
+    bindDonate();
     showAuthShell(true);
     try {
       const result = await apiRequest("/auth/session");
       if (result.authenticated && result.user) {
         startApp(result.user);
       } else {
-        setAuthStatus("请先登录或注册账号。", "muted");
+        setAuthStatus("请使用学号和密码登录。", "muted");
       }
     } catch (error) {
       setAuthStatus(error.message || "后端暂时不可用，请先启动认证服务。", "error");
@@ -118,27 +184,47 @@
       bindFiles();
       bindTermHelp();
       bindGlobalActions();
+      bindBonus();
+      bindHashNavigation();
       $("#logoutButton")?.addEventListener("click", logout);
       $("#mobileLogout")?.addEventListener("click", logout);
+      $("#topLogout")?.addEventListener("click", logout);
       appBound = true;
     }
     showAuthShell(false);
     expireRecruitments();
-    showView(STEP_VIEW[currentTaskStep()] || "profile", { step: currentTaskStep(), persist: false });
+    const hashView = location.hash.replace(/^#/, "");
+    if (hashView && $(`#view-${hashView}`)) {
+      showView(hashView, { persist: false, fromHash: true });
+    } else {
+      showView(STEP_VIEW[currentTaskStep()] || "profile", { step: currentTaskStep(), persist: false });
+    }
+  }
+
+  function bindDonate() {
+    const fab = $("#donateFab");
+    const dialog = $("#donateDialog");
+    if (!fab || !dialog || fab.dataset.bound) return;
+    fab.dataset.bound = "1";
+    fab.addEventListener("click", () => dialog.showModal());
   }
 
   function bindAuth() {
     $$("[data-auth-mode]").forEach((button) => {
       button.addEventListener("click", () => setAuthMode(button.dataset.authMode));
     });
+    $("#sendOtpButton")?.addEventListener("click", sendOtp);
     $("#loginForm")?.addEventListener("submit", (event) => submitAuth(event, "/auth/login"));
-    $("#registerForm")?.addEventListener("submit", (event) => submitAuth(event, "/auth/register"));
+    $("#registerForm")?.addEventListener("submit", submitRegister);
   }
 
   function setAuthMode(mode) {
-    const register = mode === "register";
-    $("#loginForm")?.classList.toggle("hidden", register);
-    $("#registerForm")?.classList.toggle("hidden", !register);
+    const isRegister = mode === "register";
+    $("#loginForm")?.classList.toggle("hidden", isRegister);
+    $("#registerForm")?.classList.toggle("hidden", !isRegister);
+    $("#authNoteLogin")?.classList.toggle("hidden", isRegister);
+    $("#authNoteRegister")?.classList.toggle("hidden", !isRegister);
+    $("#authNoteQuota")?.classList.toggle("hidden", !isRegister);
     $$("[data-auth-mode]").forEach((button) => {
       const active = button.dataset.authMode === mode;
       button.classList.toggle("active", active);
@@ -147,15 +233,98 @@
     setAuthStatus("", "muted");
   }
 
+  function studentAccount(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (!raw) return "";
+    if (raw.includes("@")) return raw;
+    return raw + EMAIL_SUFFIX;
+  }
+
+  function studentIdFromAccount(account) {
+    const value = String(account || "").trim();
+    const suffix = EMAIL_SUFFIX;
+    if (value.toLowerCase().endsWith(suffix)) return value.slice(0, -suffix.length);
+    return value;
+  }
+
+  async function sendOtp() {
+    const form = $("#registerForm");
+    const button = $("#sendOtpButton");
+    const account = String(new FormData(form).get("account") || "").trim();
+    if (!account) {
+      setAuthStatus("请先填写学号。", "error");
+      return;
+    }
+    if (button) button.disabled = true;
+    setAuthStatus("正在发送验证码…", "muted");
+    try {
+      await apiRequest("/auth/otp/send", { method: "POST", body: JSON.stringify({ account: studentAccount(account) }) });
+      setAuthStatus("验证码已发送，10 分钟内有效。", "muted");
+      startOtpCooldown(button);
+    } catch (error) {
+      setAuthStatus(error.message || "验证码发送失败。", "error");
+      if (button) button.disabled = false;
+    }
+  }
+
+  function startOtpCooldown(button, seconds = 60) {
+    if (!button) return;
+    let remaining = seconds;
+    const tick = () => {
+      if (remaining <= 0) {
+        button.disabled = false;
+        button.textContent = "发送验证码";
+        return;
+      }
+      button.disabled = true;
+      button.textContent = `${remaining}s`;
+      remaining -= 1;
+      window.setTimeout(tick, 1000);
+    };
+    tick();
+  }
+
+  async function submitRegister(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = Object.fromEntries(new FormData(form).entries());
+    const submit = form.querySelector("[type='submit']");
+    if (submit) submit.disabled = true;
+    setAuthStatus("正在注册…", "muted");
+    try {
+      const result = await apiRequest("/auth/register", {
+        method: "POST",
+        body: JSON.stringify({
+          account: studentAccount(data.account),
+          password: data.password,
+          code: data.code,
+        }),
+      });
+      form.reset();
+      setAuthStatus("", "muted");
+      startApp(result.user);
+    } catch (error) {
+      setAuthStatus(error.message || "注册失败，请稍后重试。", "error");
+    } finally {
+      if (submit) submit.disabled = false;
+    }
+  }
+
   async function submitAuth(event, endpoint) {
     event.preventDefault();
     const form = event.currentTarget;
     const data = Object.fromEntries(new FormData(form).entries());
     const submit = form.querySelector("[type='submit']");
     if (submit) submit.disabled = true;
-    setAuthStatus(endpoint.includes("register") ? "正在创建账号…" : "正在登录…", "muted");
+    setAuthStatus("正在登录…", "muted");
     try {
-      const result = await apiRequest(endpoint, { method: "POST", body: JSON.stringify(data) });
+      const result = await apiRequest(endpoint, {
+        method: "POST",
+        body: JSON.stringify({
+          account: studentAccount(data.account),
+          password: data.password,
+        }),
+      });
       form.reset();
       setAuthStatus("", "muted");
       startApp(result.user);
@@ -167,11 +336,13 @@
   }
 
   async function logout() {
+    const userId = CURRENT_USER_ID;
     try {
       await apiRequest("/auth/logout", { method: "POST" });
     } catch {
       // The local session is cleared below even when the server is unavailable.
     }
+    if (userId) localStorage.removeItem(userStorageKey(userId));
     CURRENT_USER_ID = "";
     state = emptyState();
     showAuthShell(true);
@@ -254,7 +425,9 @@
       messages: [],
       conversations: [],
       customTags: [],
+      catalogProposals: [],
       reports: [],
+      bonusGuide: {},
     };
   }
 
@@ -663,8 +836,6 @@
             summary: "面向大一年度项目的早期草稿，准备先凑齐产品、前端和后端分工。",
             requirement: "希望能稳定开会，尽快完成题目收敛和原型。",
             deadline: plus(20).slice(0, 16),
-            smsCode: "",
-            captcha: "",
           },
           updatedAt: plus(-1),
         },
@@ -686,8 +857,6 @@
             summary: "围绕大创申报材料准备，已有技术方向和部分数据来源。",
             requirement: "需要能写申报书、做实验记录和数据分析的同学。",
             deadline: plus(28).slice(0, 16),
-            smsCode: "",
-            captcha: "",
           },
           updatedAt: plus(-2),
         },
@@ -786,8 +955,12 @@
       const raw = localStorage.getItem(userStorageKey(user.id));
       if (!raw) return ensureStateShape(emptyState(user), user);
       const parsed = JSON.parse(raw);
-      if (!parsed || !Array.isArray(parsed.recruitments)) return ensureStateShape(emptyState(user), user);
-      return ensureStateShape(parsed, user);
+      if (!parsed || typeof parsed !== "object") return ensureStateShape(emptyState(user), user);
+      const base = emptyState(user);
+      if (parsed.ui && typeof parsed.ui === "object") base.ui = parsed.ui;
+      if (Array.isArray(parsed.files)) base.files = parsed.files;
+      if (Array.isArray(parsed.reports)) base.reports = parsed.reports;
+      return ensureStateShape(base, user);
     } catch (error) {
       console.warn("Failed to load state", error);
       return ensureStateShape(emptyState(user), user);
@@ -801,7 +974,9 @@
     if (authUser && ["admin", "creator"].includes(nextState.ui.role) && authUser.systemRole !== nextState.ui.role) {
       nextState.ui.role = DEFAULT_UI.role;
     }
+    if (nextState.ui.taskStep === "review") nextState.ui.taskStep = "apply";
     if (!STEP_VIEW[nextState.ui.taskStep]) nextState.ui.taskStep = DEFAULT_UI.taskStep;
+    if (!["", "applications", "review"].includes(nextState.ui.queueTab)) nextState.ui.queueTab = "";
     nextState.ui.advancedOpen = Boolean(nextState.ui.advancedOpen);
     if (!['light', 'dark'].includes(nextState.ui.theme)) nextState.ui.theme = DEFAULT_UI.theme;
     nextState.users ||= [];
@@ -834,7 +1009,10 @@
     nextState.conversations ||= [];
     delete nextState.collaboration;
     nextState.customTags ||= [];
+    nextState.catalogProposals ||= [];
     nextState.reports ||= [];
+    nextState.bonusGuide ||= {};
+    nextState.projectLibraryNote ||= PROJECT_LIBRARY_NOTE;
     nextState.recruitments.forEach((item) => {
       normalizeRecruitment(item, nextState.projects, nextState.competitions);
       item.grades ||= ["大一", "大二", "大三", "大四", "硕士", "博士"];
@@ -849,7 +1027,8 @@
       user.grade ||= computeGrade(user.gradeCohort, user.degree) || "";
       user.systemRole ||= null;
       user.awards.forEach((award) => {
-        award.shortName ||= shortNameForAward(award.name);
+        award.kind ||= "competition";
+        award.shortName ||= shortNameForAward(award);
         award.bonusType ||= "";
       });
     });
@@ -916,13 +1095,26 @@
     return projects.find((project) => normalizeSearchText(project.title) === normalized);
   }
 
-  function shortNameForAward(name = "") {
-    const text = String(name);
+  function shortNameForAward(awardOrName = "", kind = "") {
+    if (awardOrName && typeof awardOrName === "object") {
+      const award = awardOrName;
+      const awardKind = award.kind || kind || "competition";
+      if (awardKind === "paper") return paperVenueText(award.paperVenue) || "论文";
+      if (awardKind === "patent") return "专利";
+      if (awardKind === "software") return "软著";
+      if (awardKind === "scholarship") return scholarshipTypeText(award.scholarshipType) || "奖学金";
+      return shortNameForAward(award.name || "", "competition");
+    }
+    const text = String(awardOrName);
     if (text.includes("美国大学生数学建模") || text.includes("美赛")) return "美赛";
     if (text.includes("中国国际大学生创新大赛") || text.includes("创新大赛")) return "国创赛";
     if (text.includes("挑战杯")) return "挑战杯";
     if (text.includes("数学建模")) return "数模国赛";
     if (text.includes("RoboMaster")) return "RM";
+    if (kind === "paper") return "论文";
+    if (kind === "patent") return "专利";
+    if (kind === "software") return "软著";
+    if (kind === "scholarship") return "奖学金";
     return text.slice(0, 8) || "竞赛";
   }
 
@@ -986,7 +1178,15 @@
 
   function saveState() {
     state.updatedAt = new Date().toISOString();
-    if (CURRENT_USER_ID) localStorage.setItem(userStorageKey(CURRENT_USER_ID), JSON.stringify(state));
+    if (!CURRENT_USER_ID) return;
+    localStorage.setItem(
+      userStorageKey(CURRENT_USER_ID),
+      JSON.stringify({
+        ui: state.ui,
+        files: state.files,
+        reports: state.reports,
+      }),
+    );
   }
 
   async function hydrateRemoteState(authUser = currentUser()) {
@@ -1013,6 +1213,7 @@
         drafts: remoteDrafts,
         files: local.files,
         customTags: Array.isArray(remote.customTags) ? remote.customTags : local.customTags,
+        catalogProposals: Array.isArray(remote.catalogProposals) ? remote.catalogProposals : local.catalogProposals || [],
         reports: local.reports,
       },
       authUser,
@@ -1104,41 +1305,45 @@
       toast("该管理身份需要后端授权", "error");
       return;
     }
+    const previous = currentRole();
     state.ui.role = role;
-    if (role === "captain") {
-      state.ui.taskStep = "review";
-      saveState();
-      showView("mine", { step: "review" });
-      return;
-    }
-    if (role === "admin") {
-      state.ui.taskStep = "advanced";
+    if (role === "admin" || role === "creator") {
       state.ui.advancedOpen = true;
-      saveState();
-      showView("admin", { step: "advanced" });
-      return;
+    } else {
+      state.ui.advancedOpen = false;
     }
-    if (role === "creator") {
-      state.ui.taskStep = "advanced";
-      state.ui.advancedOpen = true;
-      saveState();
-      showView("admin", { step: "advanced" });
-      return;
+    if (role !== previous) {
+      state.ui.queueTab = role === "captain" ? "review" : "applications";
     }
-    state.ui.taskStep = profileReadiness(currentUser()).ready ? "discover" : "profile";
     saveState();
-    showView(STEP_VIEW[state.ui.taskStep], { step: state.ui.taskStep });
+    if (!canManageContent(role) && $("#view-admin")?.classList.contains("active")) {
+      showView("profile", { step: "profile", silent: true });
+      return;
+    }
+    renderAll();
   }
 
   function bindNavigation() {
-    $$(".nav-item, .mobile-nav").forEach((button) => {
-      button.addEventListener("click", () => showView(button.dataset.view, { step: button.dataset.step }));
+    $$(".nav-item, .mobile-nav, #mobileAdvancedRow [data-view]").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (button.dataset.adminTab) adminTab = button.dataset.adminTab;
+        showView(button.dataset.view, { step: button.dataset.step });
+      });
     });
     $$("[data-view-jump]").forEach((button) => {
       button.addEventListener("click", () => showView(button.dataset.viewJump, { step: button.dataset.stepJump || button.dataset.step }));
     });
-    $$("#roleSwitch [data-role]").forEach((button) => {
+    $$(".role-switch [data-role]").forEach((button) => {
       button.addEventListener("click", () => setRole(button.dataset.role));
+    });
+    $$("[data-queue-tab]").forEach((button) => {
+      button.addEventListener("click", () => setQueueTab(button.dataset.queueTab));
+    });
+    $$("[data-admin-tab]").forEach((button) => {
+      button.addEventListener("click", () => {
+        adminTab = button.dataset.adminTab || "projects";
+        renderAdmin();
+      });
     });
     $("#toggleAdvanced")?.addEventListener("click", () => {
       state.ui.advancedOpen = !state.ui.advancedOpen;
@@ -1152,24 +1357,58 @@
     });
   }
 
+  function bindHashNavigation() {
+    window.addEventListener("hashchange", () => {
+      const view = location.hash.replace(/^#/, "");
+      if (view && $(`#view-${view}`)) showView(view, { persist: false, fromHash: true });
+    });
+  }
+
+  function markActiveNav(view) {
+    const exactNav = $$(".nav-item, .mobile-nav").some((button) => button.dataset.view === view);
+    $$(".nav-item, .mobile-nav").forEach((button) => {
+      const advancedButton = button.classList.contains("advanced-nav-item");
+      const active = exactNav
+        ? button.dataset.view === view
+        : !advancedButton && button.dataset.step === currentTaskStep();
+      button.classList.toggle("active", active);
+    });
+  }
+
   function showView(view, options = {}) {
-    const step = options.step || VIEW_STEP[view] || currentTaskStep();
+    if (view === "messages") {
+      state.ui.queueTab = "applications";
+      view = "queue";
+    } else if (view === "mine") {
+      state.ui.queueTab = "review";
+      view = "queue";
+    } else if (view === "files") {
+      view = "admin";
+    }
+    if (view === "admin" && !canManageContent()) {
+      if (!options.silent) toast("只有管理员或创建者可以打开管理后台", "error");
+      view = "profile";
+      options = { ...options, step: "profile" };
+    }
+    const step = options.step === "review" ? "apply" : options.step || VIEW_STEP[view] || currentTaskStep();
     setTaskStep(step, options.persist !== false);
-    if (view === "admin" || view === "files") {
+    if (view === "admin") {
       state.ui.advancedOpen = true;
       if (options.persist !== false) saveState();
     }
     $$(".view").forEach((section) => section.classList.remove("active"));
     $(`#view-${view}`)?.classList.add("active");
-    $$(".nav-item, .mobile-nav").forEach((button) => {
-      const advancedButton = button.classList.contains("advanced-nav-item");
-      const activeView = $(".view.active")?.id?.replace("view-", "");
-      button.classList.toggle("active", advancedButton ? button.dataset.view === activeView : button.dataset.step === currentTaskStep());
-    });
+    markActiveNav(view);
     const [eyebrow, title] = viewMeta[view] || viewMeta.discover;
     $("#viewEyebrow").textContent = eyebrow;
     $("#viewTitle").textContent = title;
     if (view === "profile") populateProfileForm();
+    if (!options.fromHash) {
+      const desired = view === "bonus" ? "#bonus" : view === "queue" ? "#queue" : "";
+      if ((location.hash || "") !== desired) {
+        history.replaceState(null, "", desired || `${location.pathname}${location.search}`);
+      }
+    }
     renderAll();
   }
 
@@ -1235,6 +1474,34 @@
     }, 120);
   }
 
+  function chinaDayKey(value) {
+    const date = value ? new Date(value) : new Date();
+    if (Number.isNaN(date.getTime())) return "";
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(date);
+    const part = (type) => parts.find((item) => item.type === type)?.value || "";
+    return `${part("year")}-${part("month")}-${part("day")}`;
+  }
+
+  function publishedToday() {
+    const today = chinaDayKey();
+    return state.recruitments.some(
+      (item) => item.publisherId === CURRENT_USER_ID && chinaDayKey(item.createdAt) === today,
+    );
+  }
+
+  function syncPublishLimit() {
+    const blocked = Boolean(CURRENT_USER_ID) && publishedToday();
+    const submit = $("#publishForm [type='submit']");
+    const mobile = $("#mobileSubmitPublish");
+    if (submit) submit.disabled = blocked;
+    if (mobile) mobile.disabled = blocked;
+  }
+
   function bindPublish() {
     const form = $("#publishForm");
     bindGradeRange(form);
@@ -1258,6 +1525,11 @@
     });
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+      syncPublishLimit();
+      if (publishedToday()) {
+        toast("今天已经发布过招募", "error");
+        return;
+      }
       const draftData = collectPublishDraft(form);
       const errors = validatePublishDraft(draftData);
       renderFieldErrors(errors);
@@ -1362,6 +1634,8 @@
       max.disabled = false;
     }
     $("#programEligibilityNote").textContent = program.note;
+    const libraryNote = $("#projectLibraryNote");
+    if (libraryNote) libraryNote.textContent = state.projectLibraryNote || PROJECT_LIBRARY_NOTE;
     updateGradeRangeLabel(form);
   }
 
@@ -1372,10 +1646,14 @@
     input.addEventListener("input", () => {
       form.elements.projectId.value = "";
       form.elements.projectSelectionMode.value = "new";
-      $("#projectSelectionMeta").textContent = input.value.trim() ? "默认可新增项目；按上下键切换到已有项目。" : "输入后可用上下键选择，Enter 确认。";
       renderProjectSuggestions(input.value);
     });
     input.addEventListener("focus", () => renderProjectSuggestions(input.value));
+    input.addEventListener("blur", () => {
+      window.setTimeout(() => {
+        if (!document.activeElement?.closest(".project-picker")) closeProjectSuggestions();
+      }, 150);
+    });
     input.addEventListener("keydown", (event) => {
       if (!projectSuggestionState.open) return;
       if (event.key === "ArrowDown") {
@@ -1392,17 +1670,18 @@
           event.preventDefault();
           selectProjectOption(option, form);
         }
-      } else if (event.key === "Escape") {
+      } else if (event.key === "Tab" || event.key === "Escape") {
         closeProjectSuggestions();
       }
     });
-    menu.addEventListener("click", (event) => {
+    menu.addEventListener("mousedown", (event) => {
       const option = event.target.closest("[data-project-option]");
       if (!option) return;
+      event.preventDefault();
       const selected = projectSuggestionState.options[Number(option.dataset.projectOption)];
       if (selected) selectProjectOption(selected, form);
     });
-    document.addEventListener("click", (event) => {
+    document.addEventListener("pointerdown", (event) => {
       if (!event.target.closest(".project-picker")) closeProjectSuggestions();
     });
   }
@@ -1410,45 +1689,58 @@
   function renderProjectSuggestions(query = "", preserveActive = false) {
     const input = $("#projectTitleInput");
     const menu = $("#projectSuggestions");
+    const meta = $("#projectSelectionMeta");
     if (!input || !menu) return;
     const normalized = normalizeSearchText(query);
+    if (!normalized) {
+      closeProjectSuggestions();
+      if (meta) meta.textContent = "输入后若匹配到项目库参考题会出现下拉；没有匹配则自动关闭，按新题目发布。";
+      return;
+    }
     const projects = (state.projects || []).filter((project) => project.active !== false);
-    const matches = projects.filter((project) => {
-      if (!normalized) return true;
-      return normalizeSearchText(`${project.title} ${project.summary} ${project.college}`).includes(normalized);
-    });
+    const matches = projects.filter((project) =>
+      normalizeSearchText(`${project.title} ${project.advisor} ${project.college}`).includes(normalized),
+    );
     const exact = matches.filter((project) => normalizeSearchText(project.title) === normalized);
-    const fuzzy = matches.filter((project) => !exact.includes(project));
-    const options = fuzzy.slice(0, 6).map((project) => ({ mode: "existing", project, title: project.title }));
-    if (normalized) {
-      options.push({ mode: "new", title: String(query).trim() });
-      exact.forEach((project) => options.push({ mode: "existing", project, title: project.title }));
+    if (!preserveActive && exact.length === 1 && String(query).trim() === exact[0].title) {
+      const form = $("#publishForm");
+      if (form) selectProjectOption({ mode: "existing", project: exact[0], title: exact[0].title }, form);
+      return;
     }
+    const options = matches.slice(0, 6).map((project) => ({ mode: "existing", project, title: project.title }));
     projectSuggestionState.options = options;
-    if (!preserveActive) {
-      const newIndex = options.findIndex((option) => option.mode === "new");
-      projectSuggestionState.activeIndex = newIndex >= 0 ? newIndex : 0;
-    }
-    projectSuggestionState.open = Boolean(options.length);
-    input.setAttribute("aria-expanded", String(projectSuggestionState.open));
-    menu.innerHTML = options.length
+    if (!preserveActive) projectSuggestionState.activeIndex = 0;
+    const open = Boolean(options.length);
+    projectSuggestionState.open = open;
+    input.setAttribute("aria-expanded", String(open));
+    menu.innerHTML = open
       ? options
           .map(
             (option, index) => `
-              <button class="project-option ${option.mode === "new" ? "new-option" : ""} ${index === projectSuggestionState.activeIndex ? "active" : ""}" type="button" role="option" aria-selected="${index === projectSuggestionState.activeIndex ? "true" : "false"}" data-project-option="${index}">
-                <span>${escapeHtml(option.title)}</span>
-                <strong>${option.mode === "new" ? "新增项目" : "已有项目"}</strong>
+              <button class="project-option ${index === projectSuggestionState.activeIndex ? "active" : ""}" type="button" role="option" aria-selected="${index === projectSuggestionState.activeIndex ? "true" : "false"}" data-project-option="${index}">
+                <span>${escapeHtml(option.title)}<small>${escapeHtml([option.project.college, option.project.advisor, "参考题目"].filter(Boolean).join(" · "))}</small></span>
+                <strong>参考项目</strong>
               </button>
             `,
           )
           .join("")
       : "";
-    menu.classList.toggle("visible", projectSuggestionState.open);
+    menu.classList.toggle("visible", open);
+    if (meta) {
+      if (!normalized) meta.textContent = "输入后若匹配到项目库参考题会出现下拉；没有匹配则自动关闭，按新题目发布。";
+      else if (open) meta.textContent = `匹配到 ${options.length} 条参考题目，可用上下键选择，Enter 确认。未选中则仍按新题目发布。`;
+      else meta.textContent = "未匹配到项目库参考题目，弹层已关闭，将按新题目发布。";
+    }
   }
 
   function closeProjectSuggestions() {
     projectSuggestionState.open = false;
-    $("#projectSuggestions")?.classList.remove("visible");
+    projectSuggestionState.options = [];
+    const menu = $("#projectSuggestions");
+    if (menu) {
+      menu.innerHTML = "";
+      menu.classList.remove("visible");
+    }
     $("#projectTitleInput")?.setAttribute("aria-expanded", "false");
   }
 
@@ -1465,10 +1757,10 @@
         form.elements.programId.value = option.project.programId;
         applyProgramRules(form);
       }
-      $("#projectSelectionMeta").textContent = `已有项目 · ${option.project.libraryYear || "项目库"} · ${option.project.college || "未标学院"}`;
+      $("#projectSelectionMeta").textContent = `已选参考题目 · ${option.project.advisor || "未标导师"} · ${option.project.college || "未标学院"} · 题目仅供参考，也可另拟新题`;
     } else {
       projectId.value = "";
-      $("#projectSelectionMeta").textContent = "新增项目 · 发布时会保存为独立项目记录。";
+      $("#projectSelectionMeta").textContent = "新增项目 · 发布时会保存为独立项目记录。项目库题目只是参考，也可另拟新题、另找老师。";
     }
     closeProjectSuggestions();
     renderPublishSummary(collectPublishDraft(form));
@@ -1540,8 +1832,6 @@
     normalized.summary ||= "";
     normalized.requirement ||= "";
     normalized.deadline ||= "";
-    normalized.smsCode ||= "";
-    normalized.captcha ||= "";
     return normalized;
   }
 
@@ -1686,8 +1976,6 @@
     const deadline = new Date(String(data.deadline));
     if (!data.deadline || Number.isNaN(deadline.getTime())) errors.deadline = "请设置截止时间";
     else if (deadline.getTime() <= Date.now()) errors.deadline = "截止时间不能早于当前时间";
-    if (!/^\d{4,6}$/.test(String(data.smsCode || ""))) errors.smsCode = "短信验证码需为 4-6 位数字";
-    if (String(data.captcha || "").trim().toUpperCase() !== "HIT") errors.captcha = "行为验证码请输入 HIT";
     return errors;
   }
 
@@ -1772,6 +2060,11 @@
         profileTagMenuOpen = true;
         renderProfileTagPicker(event.currentTarget.value);
       }
+    });
+    $("#profileTagSearch")?.addEventListener("blur", () => {
+      window.setTimeout(() => {
+        if (!document.activeElement?.closest("#profileTagPicker")) closeProfileTagMenu();
+      }, 150);
     });
     $("#profileTagSearch")?.addEventListener("keydown", (event) => {
       const menu = $("#profileTagSuggestions");
@@ -1921,6 +2214,29 @@
       }
     });
     $("#previewOwnResume")?.addEventListener("click", () => openResumePreview(CURRENT_USER_ID));
+    $("#passwordForm")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const passwordForm = event.currentTarget;
+      const data = Object.fromEntries(new FormData(passwordForm).entries());
+      const submit = passwordForm.querySelector("[type='submit']");
+      if (submit) submit.disabled = true;
+      try {
+        await apiRequest("/auth/password", {
+          method: "PATCH",
+          body: JSON.stringify({
+            oldPassword: data.oldPassword,
+            newPassword: data.newPassword,
+          }),
+        });
+        passwordForm.reset();
+        if ($("#profileAccount")) $("#profileAccount").value = studentIdFromAccount(currentUser().account);
+        toast("密码已更新");
+      } catch (error) {
+        toast(error.message || "密码更新失败", "error");
+      } finally {
+        if (submit) submit.disabled = false;
+      }
+    });
   }
 
   function renderGradeCohortOptions() {
@@ -2023,21 +2339,23 @@
       options.push({ name: String(query).trim(), usageCount: 0, request: true });
     }
     profileTagActiveIndex = Math.min(profileTagActiveIndex, Math.max(options.length - 1, 0));
-    menu.innerHTML = pickerOpen
-      ? options.length
+    const showTagMenu = Boolean(pickerOpen && options.length);
+    menu.innerHTML = showTagMenu
       ? options
-          .map(
-            (tag, index) => `
+          .map((tag, index) => {
+            const requestHint = tag.request ? "<small>加入候选词并提交管理员审核</small>" : "";
+            const usage = tag.request ? "新增" : `已有 ${tag.usageCount || 0} 人`;
+            return `
               <button type="button" class="autocomplete-option ${index === profileTagActiveIndex ? "active" : ""}" data-profile-tag-option="true" data-tag-name="${escapeAttr(tag.name)}" data-tag-request="${String(Boolean(tag.request))}" role="option">
-                <span><strong>${escapeHtml(tag.name)}</strong>${tag.request ? "<small>加入候选词并提交管理员审核</small>" : ""}</span>
-                <em>${tag.request ? "新增" : `已有 ${tag.usageCount || 0} 人`}</em>
+                <span><strong>${escapeHtml(tag.name)}</strong>${requestHint}</span>
+                <em>${usage}</em>
               </button>
-            `,
-          )
+            `;
+          })
           .join("")
-      : `<div class="autocomplete-empty">没有重合标签，可直接添加为候选词</div>`
       : "";
-    if (input) input.setAttribute("aria-expanded", String(Boolean(pickerOpen)));
+    menu.classList.toggle("visible", showTagMenu);
+    if (input) input.setAttribute("aria-expanded", String(showTagMenu));
     selected.innerHTML = selectedNames.length
       ? selectedNames
           .map(
@@ -2159,16 +2477,33 @@
   function bindAwards() {
     const form = $("#awardForm");
     const search = $("#awardCompetitionSearch");
+    $("#awardKind")?.addEventListener("change", () => {
+      syncAwardKindFields();
+      closeAwardCompetitionMenu();
+      renderAwardPreview();
+    });
+    $("#scholarshipType")?.addEventListener("change", () => {
+      syncAwardKindFields();
+      renderAwardPreview();
+    });
     search?.addEventListener("input", (event) => {
+      if (($("#awardKind")?.value || "competition") !== "competition") {
+        closeAwardCompetitionMenu();
+        renderAwardPreview();
+        return;
+      }
       awardCompetitionActiveIndex = 0;
-      awardCompetitionMenuOpen = Boolean(normalizeSearchText(event.currentTarget.value));
       renderAwardCompetitionSuggestions(event.currentTarget.value);
     });
     search?.addEventListener("focus", (event) => {
-      if (normalizeSearchText(event.currentTarget.value)) {
-        awardCompetitionMenuOpen = true;
+      if (($("#awardKind")?.value || "competition") === "competition") {
         renderAwardCompetitionSuggestions(event.currentTarget.value);
       }
+    });
+    search?.addEventListener("blur", () => {
+      window.setTimeout(() => {
+        if (!document.activeElement?.closest("#awardForm .autocomplete-field")) closeAwardCompetitionMenu();
+      }, 150);
     });
     search?.addEventListener("keydown", (event) => {
       const options = $$('[data-award-competition-option="true"]', $("#awardCompetitionSuggestions"));
@@ -2186,13 +2521,16 @@
           event.preventDefault();
           selectAwardCompetition(option.dataset.competitionId);
         }
-      } else if (event.key === "Escape") {
+      } else if (event.key === "Tab" || event.key === "Escape") {
         closeAwardCompetitionMenu();
       }
     });
-    $("#awardCompetitionSuggestions")?.addEventListener("click", (event) => {
+    $("#awardCompetitionSuggestions")?.addEventListener("mousedown", (event) => {
       const option = event.target.closest('[data-award-competition-option="true"]');
-      if (option) selectAwardCompetition(option.dataset.competitionId);
+      if (option) {
+        event.preventDefault();
+        selectAwardCompetition(option.dataset.competitionId);
+      }
     });
     form.addEventListener("input", renderAwardPreview);
     form.addEventListener("change", () => {
@@ -2202,6 +2540,10 @@
     $("#awardForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       const award = awardFromForm(form);
+      if (!award.name) {
+        toast("请填写成果标题", "error");
+        return;
+      }
       const user = currentUser();
       user.awards.unshift(award);
       const duplicate = duplicateAwardHint(user, award);
@@ -2209,13 +2551,14 @@
         await persistCurrentProfile(user);
         form.reset();
         delete form.dataset.competitionId;
+        syncAwardKindFields();
         syncSoloAwardFields();
         renderProfile();
         renderAwardPreview();
-        toast(duplicate || "竞赛履历已添加");
+        toast(duplicate || "成果履历已添加");
       } catch (error) {
         user.awards = user.awards.filter((item) => item.id !== award.id);
-        toast(error.message || "竞赛履历保存失败", "error");
+        toast(error.message || "成果履历保存失败", "error");
       }
     });
     $("#awardList").addEventListener("click", (event) => {
@@ -2228,26 +2571,75 @@
         .then(() => renderProfile())
         .catch((error) => {
           user.awards = previous;
-          toast(error.message || "竞赛履历删除失败", "error");
+          toast(error.message || "成果履历删除失败", "error");
           renderProfile();
         });
     });
+    syncAwardKindFields();
   }
 
   function awardFromForm(form) {
     const data = new FormData(form);
+    const kind = String(data.get("kind") || "competition");
+    const scholarshipType = String(data.get("scholarshipType") || "");
+    let name = String(data.get("name") || "").trim();
+    if (kind === "scholarship" && scholarshipType && scholarshipType !== "other") {
+      name = scholarshipTypeText(scholarshipType);
+    }
     return {
       id: uid("award"),
-      name: String(data.get("name")).trim(),
+      kind,
+      name,
       shortName: String(data.get("shortName") || "").trim(),
       year: Number(data.get("year")) || new Date().getFullYear(),
-      level: String(data.get("level")),
-      role: String(data.get("role")),
-      award: String(data.get("award")),
+      level: String(data.get("level") || ""),
+      role: String(data.get("role") || ""),
+      award: String(data.get("award") || ""),
       bonusType: String(data.get("bonusType") || ""),
+      paperVenue: String(data.get("paperVenue") || ""),
+      scholarshipType,
       competitionId: form.dataset.competitionId || "",
       solo: data.get("solo") === "on",
     };
+  }
+
+  function syncAwardKindFields() {
+    const form = $("#awardForm");
+    if (!form) return;
+    const kind = form.elements.kind?.value || "competition";
+    const scholarshipType = form.elements.scholarshipType?.value || "national";
+    $$("[data-award-panel]").forEach((el) => {
+      const panels = String(el.dataset.awardPanel || "").split(/\s+/).filter(Boolean);
+      el.classList.toggle("hidden", !panels.includes(kind));
+    });
+    const labels = {
+      competition: "竞赛全名 *",
+      paper: "论文标题 *",
+      patent: "专利名称 *",
+      software: "软著名称 *",
+      scholarship: scholarshipType === "other" ? "奖学金标题 *" : "奖学金名称",
+    };
+    const placeholders = {
+      competition: "搜索全名、别名或简称",
+      paper: "填写论文题目",
+      patent: "填写专利名称",
+      software: "填写软件著作权名称",
+      scholarship: scholarshipType === "other" ? "填写其他奖学金标题" : "已按奖学金类型自动填入",
+    };
+    const nameLabel = $("#awardNameLabel");
+    const nameInput = $("#awardCompetitionSearch");
+    if (nameLabel) nameLabel.textContent = labels[kind] || "标题 *";
+    if (nameInput) {
+      nameInput.placeholder = placeholders[kind] || "填写标题";
+      if (kind === "scholarship" && scholarshipType !== "other") {
+        nameInput.value = scholarshipTypeText(scholarshipType);
+        nameInput.readOnly = true;
+      } else {
+        nameInput.readOnly = false;
+        if (kind === "scholarship" && SCHOLARSHIP_TYPE_LABELS[nameInput.value]) nameInput.value = "";
+      }
+    }
+    if (kind !== "competition") closeAwardCompetitionMenu();
   }
 
   function renderAwardPreview() {
@@ -2257,7 +2649,7 @@
     syncSoloAwardFields();
     const award = awardFromForm(form);
     const duplicate = duplicateAwardHint(currentUser(), award);
-    preview.textContent = `奖项标签预览：${award.shortName || shortNameForAward(award.name) || "竞赛简称"} ${awardText(award.award)}${award.bonusType ? ` · ${bonusTypeText(award.bonusType)}` : ""}${duplicate ? `；${duplicate}` : ""}`;
+    preview.textContent = `成果标签预览：${award.shortName || shortNameForAward(award) || "成果简称"} · ${awardBadgeText(award)}${duplicate ? `；${duplicate}` : ""}`;
   }
 
   function renderAwardCompetitionSuggestions(query = "") {
@@ -2265,23 +2657,21 @@
     const input = $("#awardCompetitionSearch");
     if (!menu) return;
     const normalized = normalizeSearchText(query);
-    const pickerOpen = awardCompetitionMenuOpen && Boolean(normalized);
-    const options = (pickerOpen ? state.competitions || [] : [])
-      .filter((item) => {
-        if (!normalized) return true;
-        return [item.name, item.subtitle, ...(item.aliases || [])].some((value) => normalizeSearchText(value).includes(normalized));
-      })
-      .sort((a, b) => {
-        const score = (item) => {
-          const values = [item.name, ...(item.aliases || [])].map(normalizeSearchText);
-          return values.some((value) => value === normalized) ? 2 : values.some((value) => value.startsWith(normalized)) ? 1 : 0;
-        };
-        return score(b) - score(a) || a.name.localeCompare(b.name, "zh-CN");
-      })
-      .slice(0, 8);
+    const options = normalized
+      ? (state.competitions || [])
+          .filter((item) => [item.name, item.subtitle, ...(item.aliases || [])].some((value) => normalizeSearchText(value).includes(normalized)))
+          .sort((a, b) => {
+            const score = (item) => {
+              const values = [item.name, ...(item.aliases || [])].map(normalizeSearchText);
+              return values.some((value) => value === normalized) ? 2 : values.some((value) => value.startsWith(normalized)) ? 1 : 0;
+            };
+            return score(b) - score(a) || a.name.localeCompare(b.name, "zh-CN");
+          })
+          .slice(0, 8)
+      : [];
+    awardCompetitionMenuOpen = Boolean(options.length);
     awardCompetitionActiveIndex = Math.min(awardCompetitionActiveIndex, Math.max(options.length - 1, 0));
-    menu.innerHTML = pickerOpen
-      ? options.length
+    menu.innerHTML = options.length
       ? options
           .map(
             (item, index) => `
@@ -2292,20 +2682,28 @@
             `,
           )
           .join("")
-      : `<div class="autocomplete-empty">没有匹配项，可以直接输入新的竞赛全名</div>`
       : "";
-    input?.setAttribute("aria-expanded", String(Boolean(pickerOpen)));
+    menu.classList.toggle("visible", Boolean(options.length));
+    input?.setAttribute("aria-expanded", String(Boolean(options.length)));
   }
 
   function closeProfileTagMenu() {
     profileTagMenuOpen = false;
-    $("#profileTagSuggestions") && ($("#profileTagSuggestions").innerHTML = "");
+    const menu = $("#profileTagSuggestions");
+    if (menu) {
+      menu.innerHTML = "";
+      menu.classList.remove("visible");
+    }
     $("#profileTagSearch")?.setAttribute("aria-expanded", "false");
   }
 
   function closeAwardCompetitionMenu() {
     awardCompetitionMenuOpen = false;
-    $("#awardCompetitionSuggestions") && ($("#awardCompetitionSuggestions").innerHTML = "");
+    const menu = $("#awardCompetitionSuggestions");
+    if (menu) {
+      menu.innerHTML = "";
+      menu.classList.remove("visible");
+    }
     $("#awardCompetitionSearch")?.setAttribute("aria-expanded", "false");
   }
 
@@ -2335,143 +2733,147 @@
   function duplicateAwardHint(user, award) {
     if (!award.name || !award.year) return "";
     const same = (user.awards || []).filter(
-      (item) => item.id !== award.id && String(item.name).trim().toLowerCase() === String(award.name).trim().toLowerCase() && Number(item.year) === Number(award.year),
+      (item) =>
+        item.id !== award.id &&
+        String(item.kind || "competition") === String(award.kind || "competition") &&
+        String(item.name).trim().toLowerCase() === String(award.name).trim().toLowerCase() &&
+        Number(item.year) === Number(award.year),
     );
     if (!same.length) return "";
-    return "同年同赛事已有记录，请确认是否重复添加";
+    return "同年同名成果已有记录，请确认是否重复添加";
   }
 
   function bindAdmin() {
-    $("#tagAdminForm").addEventListener("submit", (event) => {
-      event.preventDefault();
-      const input = event.currentTarget.elements.tagName;
-      const name = input.value.trim();
-      if (!name) return;
-      if (state.tags.some((tag) => tag.name === name)) {
-        toast("标签已存在", "error");
-        return;
+    const requireAdmin = () => {
+      if (!canManageContent(currentRole())) {
+        toast("只有管理员或创建者可以维护目录", "error");
+        return false;
       }
-      apiRequest("/catalog/tags", {
-        method: "POST",
-        body: JSON.stringify({ name }),
-      })
-        .then(() => {
-          input.value = "";
-          return refreshRemoteState();
-        })
-        .then(() => toast("标签已添加"))
-        .catch((error) => toast(error.message || "标签添加失败", "error"));
-    });
-    $("#competitionAdminForm").addEventListener("submit", (event) => {
+      return true;
+    };
+    $("#tagAdminForm")?.addEventListener("submit", (event) => {
       event.preventDefault();
+      if (!requireAdmin()) return;
       const form = event.currentTarget;
-      const name = form.elements.competitionName.value.trim();
+      const name = form.elements.tagName.value.trim();
+      const editId = $("#tagEditId")?.value || "";
       if (!name) return;
-      apiRequest("/catalog/competitions", {
-        method: "POST",
-        body: JSON.stringify({
-          name,
-          level: form.elements.competitionLevel.value,
-          subtitle: name,
-          aliases: form.elements.competitionAliases.value.split(",").map((item) => item.trim()).filter(Boolean),
-          bonusType: form.elements.competitionBonusType.value,
-        }),
-      })
+      const request = editId
+        ? apiRequest("/catalog/tags/" + encodeURIComponent(editId), {
+            method: "PATCH",
+            body: JSON.stringify({ name, active: true }),
+          })
+        : apiRequest("/catalog/tags", { method: "POST", body: JSON.stringify({ name }) });
+      request
         .then(() => {
           form.reset();
+          if ($("#tagEditId")) $("#tagEditId").value = "";
           return refreshRemoteState();
         })
-        .then(() => toast("竞赛已添加"))
-        .catch((error) => toast(error.message || "竞赛添加失败", "error"));
+        .then(() => toast(editId ? "标签已更新" : "标签已添加"))
+        .catch((error) => toast(error.message || "标签保存失败", "error"));
     });
+    $("#tagEditCancel")?.addEventListener("click", () => {
+      $("#tagAdminForm")?.reset();
+      if ($("#tagEditId")) $("#tagEditId").value = "";
+    });
+    $("#competitionAdminForm")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (!requireAdmin()) return;
+      const form = event.currentTarget;
+      const payload = competitionPayloadFromAdminForm(form);
+      if (!payload.name) return;
+      const editId = $("#competitionEditId")?.value || "";
+      const request = editId
+        ? apiRequest("/catalog/competitions/" + encodeURIComponent(editId), {
+            method: "PATCH",
+            body: JSON.stringify({ ...payload, active: true }),
+          })
+        : apiRequest("/catalog/competitions", { method: "POST", body: JSON.stringify(payload) });
+      request
+        .then(() => {
+          resetCompetitionAdminForm();
+          return refreshRemoteState();
+        })
+        .then(() => toast(editId ? "竞赛已更新" : "竞赛已添加"))
+        .catch((error) => toast(error.message || "竞赛保存失败", "error"));
+    });
+    $("#competitionEditCancel")?.addEventListener("click", resetCompetitionAdminForm);
     $("#projectAdminForm")?.addEventListener("submit", (event) => {
       event.preventDefault();
-      if (!canManageContent(currentRole())) {
-        toast("只有系统管理员或平台创建者可以维护项目库", "error");
-        return;
-      }
+      if (!requireAdmin()) return;
       const form = event.currentTarget;
       const title = form.elements.projectTitle.value.trim();
       if (!title) return;
-      apiRequest("/catalog/projects", {
-        method: "POST",
-        body: JSON.stringify({
-          title,
-          programId: form.elements.projectProgramId.value,
-          summary: form.elements.projectSummary.value.trim(),
-          source: "library",
-          libraryYear: String(new Date().getFullYear()) + "项目库",
-        }),
-      })
+      const editId = $("#projectEditId")?.value || "";
+      const payload = {
+        title,
+        programId: form.elements.projectProgramId.value,
+        summary: form.elements.projectSummary.value.trim(),
+        college: form.elements.projectCollege?.value.trim() || "",
+        advisor: form.elements.projectAdvisor?.value.trim() || "",
+        source: "library",
+        libraryYear: String(new Date().getFullYear()) + "项目库",
+      };
+      const request = editId
+        ? apiRequest("/catalog/projects/" + encodeURIComponent(editId), {
+            method: "PATCH",
+            body: JSON.stringify({ ...payload, active: true }),
+          })
+        : apiRequest("/catalog/projects", { method: "POST", body: JSON.stringify(payload) });
+      request
         .then(() => {
-          form.reset();
+          resetProjectAdminForm();
           return refreshRemoteState();
         })
-        .then(() => toast("项目已加入项目库"))
-        .catch((error) => toast(error.message || "项目添加失败", "error"));
+        .then(() => toast(editId ? "项目已更新" : "项目已加入项目库"))
+        .catch((error) => toast(error.message || "项目保存失败", "error"));
     });
-    $("#adminTags").addEventListener("click", (event) => {
-      const button = event.target.closest("[data-delete-tag]");
-      if (!button) return;
-      apiRequest("/catalog/tags/" + encodeURIComponent(button.dataset.deleteTag), {
+    $("#projectEditCancel")?.addEventListener("click", resetProjectAdminForm);
+    $("#adminTags")?.addEventListener("click", (event) => {
+      const remove = event.target.closest("[data-delete-tag]");
+      const edit = event.target.closest("[data-edit-tag]");
+      if (edit) {
+        const tag = state.tags.find((item) => item.id === edit.dataset.editTag);
+        if (!tag) return;
+        const form = $("#tagAdminForm");
+        if (form) form.elements.tagName.value = tag.name;
+        if ($("#tagEditId")) $("#tagEditId").value = tag.id;
+        return;
+      }
+      if (!remove) return;
+      apiRequest("/catalog/tags/" + encodeURIComponent(remove.dataset.deleteTag), {
         method: "PATCH",
         body: JSON.stringify({ active: false }),
       })
         .then(() => refreshRemoteState())
         .catch((error) => toast(error.message || "标签停用失败", "error"));
     });
-    $("#adminCompetitions").addEventListener("click", (event) => {
-      const button = event.target.closest("[data-delete-competition]");
+    $("#adminCompetitions")?.addEventListener("click", (event) => {
+      const remove = event.target.closest("[data-delete-competition]");
       const edit = event.target.closest("[data-edit-competition]");
-      const merge = event.target.closest("[data-merge-competition]");
-      if (!button && !edit && !merge) return;
-      if (button) {
-        apiRequest("/catalog/competitions/" + encodeURIComponent(button.dataset.deleteCompetition), {
-          method: "PATCH",
-          body: JSON.stringify({ active: false }),
-        })
-          .then(() => refreshRemoteState())
-          .catch((error) => toast(error.message || "竞赛停用失败", "error"));
-        return;
-      }
-      const item = state.competitions.find((competition) => competition.id === (edit?.dataset.editCompetition || merge?.dataset.mergeCompetition));
-      if (!item) return;
       if (edit) {
-        const aliases = window.prompt("修改别名 / 简称，用逗号分隔", (item.aliases || []).join(","));
-        if (aliases === null) return;
-        apiRequest("/catalog/competitions/" + encodeURIComponent(item.id), {
-          method: "PATCH",
-          body: JSON.stringify({ aliases: aliases.split(",").map((value) => value.trim()).filter(Boolean), bonusType: item.bonusType || "" }),
-        })
-          .then(() => refreshRemoteState())
-          .then(() => toast("竞赛别名已更新"))
-          .catch((error) => toast(error.message || "竞赛别名更新失败", "error"));
+        fillCompetitionAdminForm(state.competitions.find((item) => item.id === edit.dataset.editCompetition));
         return;
       }
-      const targetName = window.prompt("输入要合并到的竞赛全名或简称", "");
-      const target = state.competitions.find((competition) => competition.id !== item.id && [competition.name, ...(competition.aliases || [])].some((value) => normalizeSearchText(value) === normalizeSearchText(targetName)));
-      if (!target) {
-        toast("没有找到合并目标", "error");
-        return;
-      }
-      apiRequest("/catalog/competitions/" + encodeURIComponent(item.id), {
+      if (!remove) return;
+      apiRequest("/catalog/competitions/" + encodeURIComponent(remove.dataset.deleteCompetition), {
         method: "PATCH",
-        body: JSON.stringify({ mergeInto: target.id }),
+        body: JSON.stringify({ active: false }),
       })
         .then(() => refreshRemoteState())
-        .then(() => toast(`已合并到${target.name}`))
-        .catch((error) => toast(error.message || "竞赛合并失败", "error"));
+        .catch((error) => toast(error.message || "竞赛停用失败", "error"));
     });
     $("#adminProjects")?.addEventListener("click", (event) => {
-      const button = event.target.closest("[data-delete-project]");
-      if (!button) return;
-      if (!canManageContent(currentRole())) {
-        toast("只有系统管理员或平台创建者可以维护项目库", "error");
+      const remove = event.target.closest("[data-delete-project]");
+      const edit = event.target.closest("[data-edit-project]");
+      if (edit) {
+        fillProjectAdminForm(projectById(edit.dataset.editProject));
         return;
       }
-      const project = projectById(button.dataset.deleteProject);
-      if (!project) return;
-      apiRequest("/catalog/projects/" + encodeURIComponent(project.id), {
+      if (!remove) return;
+      if (!requireAdmin()) return;
+      apiRequest("/catalog/projects/" + encodeURIComponent(remove.dataset.deleteProject), {
         method: "PATCH",
         body: JSON.stringify({ active: false }),
       })
@@ -2484,7 +2886,7 @@
       const revoke = event.target.closest("[data-revoke-admin]");
       if (!appoint && !revoke) return;
       if (!canManageAdmins(currentRole())) {
-        toast("只有平台创建者可以任免管理员", "error");
+        toast("只有创建者可以任免管理员", "error");
         return;
       }
       const id = appoint?.dataset.appointAdmin || revoke?.dataset.revokeAdmin;
@@ -2496,10 +2898,10 @@
         body: JSON.stringify({ systemRole: appointing ? "admin" : null }),
       })
         .then(() => refreshRemoteState())
-        .then(() => toast(appointing ? "已任命系统管理员" : "已撤销系统管理员"))
+        .then(() => toast(appointing ? "已任命管理员" : "已撤销管理员"))
         .catch((error) => toast(error.message || "管理员权限更新失败", "error"));
     });
-    $("#customTagReview").addEventListener("click", (event) => {
+    $("#customTagReview")?.addEventListener("click", (event) => {
       const approve = event.target.closest("[data-approve-tag]");
       const reject = event.target.closest("[data-reject-tag]");
       if (!approve && !reject) return;
@@ -2512,7 +2914,20 @@
         .then(() => toast(approve ? "标签已通过并加入标签集" : "标签申请已拒绝"))
         .catch((error) => toast(error.message || "标签审核失败", "error"));
     });
-    $("#reportList").addEventListener("click", (event) => {
+    $("#catalogProposalReview")?.addEventListener("click", (event) => {
+      const approve = event.target.closest("[data-approve-proposal]");
+      const reject = event.target.closest("[data-reject-proposal]");
+      if (!approve && !reject) return;
+      const id = approve?.dataset.approveProposal || reject?.dataset.rejectProposal;
+      apiRequest("/catalog/proposals/" + encodeURIComponent(id), {
+        method: "PATCH",
+        body: JSON.stringify({ status: approve ? "approved" : "rejected" }),
+      })
+        .then(() => refreshRemoteState())
+        .then(() => toast(approve ? "竞赛提案已通过并写入名册" : "竞赛提案已驳回"))
+        .catch((error) => toast(error.message || "竞赛提案审核失败", "error"));
+    });
+    $("#reportList")?.addEventListener("click", (event) => {
       const button = event.target.closest("[data-resolve-report]");
       if (!button) return;
       const report = state.reports.find((item) => item.id === button.dataset.resolveReport);
@@ -2520,6 +2935,117 @@
       saveState();
       renderAdmin();
     });
+    $("#adminProjectSearch")?.addEventListener("input", () => {
+      adminProjectPage = 1;
+      renderAdmin();
+    });
+    $("#adminCompetitionSearch")?.addEventListener("input", () => {
+      adminCompetitionPage = 1;
+      renderAdmin();
+    });
+    $("#adminTagSearch")?.addEventListener("input", () => {
+      adminTagPage = 1;
+      renderAdmin();
+    });
+    $("#adminProvisionForm")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (!canManageAdmins(currentRole())) {
+        toast("只有创建者可以开通账号", "error");
+        return;
+      }
+      const form = event.currentTarget;
+      const data = Object.fromEntries(new FormData(form).entries());
+      const submit = form.querySelector("[type='submit']");
+      if (submit) submit.disabled = true;
+      apiRequest("/admin/users", {
+        method: "POST",
+        body: JSON.stringify({
+          account: studentAccount(data.account),
+          password: data.password,
+        }),
+      })
+        .then((result) => refreshRemoteState().then(() => result))
+        .then((result) => {
+          form.reset();
+          toast(result.created ? "账号已开通" : "密码已重置");
+        })
+        .catch((error) => toast(error.message || "开通账号失败", "error"))
+        .finally(() => {
+          if (submit) submit.disabled = false;
+        });
+    });
+    $("#adminUserSearch")?.addEventListener("input", () => {
+      renderAdmin();
+    });
+    $("#adminProjectPager")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-admin-page]");
+      if (!button) return;
+      adminProjectPage = Number(button.dataset.adminPage) || 1;
+      renderAdmin();
+    });
+    $("#adminCompetitionPager")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-admin-page]");
+      if (!button) return;
+      adminCompetitionPage = Number(button.dataset.adminPage) || 1;
+      renderAdmin();
+    });
+    $("#adminTagPager")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-admin-page]");
+      if (!button) return;
+      adminTagPage = Number(button.dataset.adminPage) || 1;
+      renderAdmin();
+    });
+  }
+
+  function competitionPayloadFromAdminForm(form) {
+    return {
+      name: form.elements.competitionName.value.trim(),
+      subtitle: form.elements.competitionName.value.trim(),
+      aliases: form.elements.competitionAliases.value.split(",").map((item) => item.trim()).filter(Boolean),
+      level: form.elements.competitionLevel.value,
+      bonusType: form.elements.competitionBonusType.value,
+      bonusNote: form.elements.competitionBonusNote?.value.trim() || "",
+      remark: form.elements.competitionRemark?.value.trim() || "",
+      extraBonus: Boolean(form.elements.competitionExtraBonus?.checked),
+    };
+  }
+
+  function fillCompetitionAdminForm(item) {
+    const form = $("#competitionAdminForm");
+    if (!form || !item) return;
+    form.elements.competitionName.value = item.name || "";
+    form.elements.competitionAliases.value = (item.aliases || []).join(", ");
+    form.elements.competitionLevel.value = item.level || "国家";
+    form.elements.competitionBonusType.value = item.bonusType || "";
+    if (form.elements.competitionBonusNote) form.elements.competitionBonusNote.value = item.bonusNote || "";
+    if (form.elements.competitionRemark) form.elements.competitionRemark.value = item.remark || "";
+    if (form.elements.competitionExtraBonus) form.elements.competitionExtraBonus.checked = Boolean(item.extraBonus);
+    if ($("#competitionEditId")) $("#competitionEditId").value = item.id;
+    adminTab = "competitions";
+    renderAdmin();
+  }
+
+  function resetCompetitionAdminForm() {
+    $("#competitionAdminForm")?.reset();
+    if ($("#competitionEditId")) $("#competitionEditId").value = "";
+  }
+
+  function fillProjectAdminForm(project) {
+    const form = $("#projectAdminForm");
+    if (!form || !project) return;
+    form.elements.projectTitle.value = project.title || "";
+    form.elements.projectProgramId.value = project.programId || "innovation_training";
+    form.elements.projectSummary.value = project.summary || "";
+    if (form.elements.projectCollege) form.elements.projectCollege.value = project.college || "";
+    if (form.elements.projectAdvisor) form.elements.projectAdvisor.value = project.advisor || "";
+    if ($("#projectEditId")) $("#projectEditId").value = project.id;
+    adminTab = "projects";
+    renderAdmin();
+  }
+
+  function resetProjectAdminForm() {
+    $("#projectAdminForm")?.reset();
+    if ($("#projectEditId")) $("#projectEditId").value = "";
   }
 
   function resetLocalCache(resetUi = false) {
@@ -2532,55 +3058,105 @@
   }
 
   function bindFiles() {
-    $("#exportAll").addEventListener("click", exportData);
-    $("#exportData").addEventListener("click", exportData);
-    $("#saveSnapshot").addEventListener("click", exportData);
-    $("#importData").addEventListener("change", importData);
-    $("#clearData").addEventListener("click", () => {
-      if (!confirm("确定清空当前浏览器缓存吗？本地附件和本地管理记录会删除；服务器上的招募、申请、消息和草稿不会删除。")) return;
-      resetLocalCache();
-      toast("本地缓存已清空，服务器业务数据未删除");
+    $$(".advanced-snapshot").forEach((button) => {
+      button.addEventListener("click", exportData);
     });
-    $("#resetDemo").addEventListener("click", () => {
-      if (!confirm("确定重置当前浏览器缓存和界面设置吗？服务器上的招募、申请、消息和草稿不会删除。")) return;
-      resetLocalCache(true);
-      toast("本地缓存已重置，服务器业务数据未删除");
+  }
+
+  function bindBonus() {
+    $("#bonusSearch")?.addEventListener("input", renderBonusCatalog);
+    $$("[data-bonus-filter]").forEach((button) => {
+      button.addEventListener("click", () => {
+        bonusFilter = button.dataset.bonusFilter || "all";
+        renderBonusCatalog();
+      });
     });
-    $("#libraryFiles").addEventListener("change", (event) => {
-      pendingLibraryFiles = Array.from(event.target.files || []);
-      $("#libraryFileState").textContent = pendingLibraryFiles.length
-        ? `已选择 ${pendingLibraryFiles.length} 个文件，约 ${formatBytes(pendingLibraryFiles.reduce((sum, file) => sum + file.size, 0))}`
-        : "未选择文件";
+    $("#proposalKind")?.addEventListener("change", syncProposalForm);
+    $("#proposalTargetId")?.addEventListener("change", () => {
+      const item = state.competitions.find((competition) => competition.id === $("#proposalTargetId").value);
+      if (!item) return;
+      fillProposalForm(item);
     });
-    $("#storeFiles").addEventListener("click", async () => {
-      if (!pendingLibraryFiles.length) {
-        toast("请选择文件");
+    $("#catalogProposalForm")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const kind = form.elements.kind.value;
+      const payload = {
+        name: form.elements.name.value.trim(),
+        aliases: form.elements.aliases.value,
+        level: form.elements.level.value,
+        bonusType: form.elements.bonusType.value,
+        bonusNote: form.elements.bonusNote.value.trim(),
+        remark: form.elements.remark.value.trim(),
+        extraBonus: Boolean(form.elements.extraBonus.checked),
+        note: form.elements.note.value.trim(),
+      };
+      if (kind === "competition_add" && !payload.name) {
+        toast("请填写竞赛名称", "error");
         return;
       }
-      const scope = $("#fileScope").value;
-      const files = await readFiles(pendingLibraryFiles, scope);
-      state.files.push(...files);
-      pendingLibraryFiles = [];
-      $("#libraryFiles").value = "";
-      $("#libraryFileState").textContent = "未选择文件";
-      saveState();
-      renderFiles();
-      toast("文件已保存到本地库");
+      apiRequest("/catalog/proposals", {
+        method: "POST",
+        body: JSON.stringify({
+          kind,
+          targetId: kind === "competition_patch" ? form.elements.targetId.value : "",
+          payload,
+          note: payload.note,
+        }),
+      })
+        .then(() => refreshRemoteState())
+        .then(() => {
+          form.reset();
+          syncProposalForm();
+          toast("申请已提交，等待管理员审核");
+        })
+        .catch((error) => toast(error.message || "申请提交失败", "error"));
     });
-    $("#fileLibrary").addEventListener("click", (event) => {
-      const remove = event.target.closest("[data-delete-file]");
-      const download = event.target.closest("[data-download-file]");
-      if (remove) {
-        state.files = state.files.filter((file) => file.id !== remove.dataset.deleteFile);
-        saveState();
-        renderFiles();
+    $("#bonusTableBody")?.addEventListener("click", (event) => {
+      const patch = event.target.closest("[data-propose-patch]");
+      const disable = event.target.closest("[data-bonus-deactivate]");
+      if (patch) {
+        const item = state.competitions.find((competition) => competition.id === patch.dataset.proposePatch);
+        if (!item) return;
+        const form = $("#catalogProposalForm");
+        if (form) form.elements.kind.value = "competition_patch";
+        syncProposalForm();
+        if ($("#proposalTargetId")) $("#proposalTargetId").value = item.id;
+        fillProposalForm(item);
+        form?.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
       }
-      if (download) {
-        const file = state.files.find((item) => item.id === download.dataset.downloadFile);
-        if (file?.dataUrl) downloadDataUrl(file);
-        else toast("该文件只保存了元数据，无法下载原文件", "error");
-      }
+      if (!disable) return;
+      apiRequest("/catalog/competitions/" + encodeURIComponent(disable.dataset.bonusDeactivate), {
+        method: "PATCH",
+        body: JSON.stringify({ active: false }),
+      })
+        .then(() => refreshRemoteState())
+        .then(() => toast("已停用该竞赛"))
+        .catch((error) => toast(error.message || "停用失败", "error"));
     });
+  }
+
+  function syncProposalForm() {
+    const kind = $("#proposalKind")?.value || "competition_add";
+    $("#proposalTargetField")?.classList.toggle("hidden", kind !== "competition_patch");
+    const select = $("#proposalTargetId");
+    if (!select) return;
+    select.innerHTML = (state.competitions || [])
+      .map((item) => `<option value="${escapeAttr(item.id)}">${escapeHtml(item.name)}</option>`)
+      .join("");
+  }
+
+  function fillProposalForm(item) {
+    const form = $("#catalogProposalForm");
+    if (!form || !item) return;
+    form.elements.name.value = item.name || "";
+    form.elements.aliases.value = (item.aliases || []).join(", ");
+    form.elements.level.value = item.level || "国家";
+    form.elements.bonusType.value = item.bonusType || "";
+    form.elements.bonusNote.value = item.bonusNote || "";
+    form.elements.remark.value = item.remark || "";
+    form.elements.extraBonus.checked = Boolean(item.extraBonus);
   }
 
   function bindGlobalActions() {
@@ -2715,12 +3291,62 @@
     renderMessages();
     renderAdmin();
     renderFiles();
+    renderBonusCatalog();
+  }
+
+  function currentQueueTab() {
+    if (state.ui.queueTab === "applications" || state.ui.queueTab === "review") return state.ui.queueTab;
+    return currentRole() === "captain" ? "review" : "applications";
+  }
+
+  function setQueueTab(tab, persist = true) {
+    if (tab !== "applications" && tab !== "review") return;
+    state.ui.queueTab = tab;
+    if (persist) saveState();
+    renderQueueTabs();
+  }
+
+  function roleActionCopy(role = currentRole()) {
+    if (role === "captain") {
+      return { view: "publish", label: "发布招募", mobile: "发布", hint: "写清题目与缺口" };
+    }
+    return { view: "discover", label: "寻找队伍", mobile: "寻找", hint: "看匹配原因" };
+  }
+
+  function renderRoleNav() {
+    const copy = roleActionCopy();
+    ["#navRoleAction", "#mobileRoleAction"].forEach((selector) => {
+      const button = $(selector);
+      if (!button) return;
+      button.dataset.view = copy.view;
+      button.dataset.step = "discover";
+      button.textContent = selector === "#mobileRoleAction" ? copy.mobile : copy.label;
+    });
+    const task = $("#taskRoleAction");
+    if (task) {
+      task.dataset.viewJump = copy.view;
+      task.dataset.step = "discover";
+    }
+    if ($("#taskRoleActionLabel")) $("#taskRoleActionLabel").textContent = copy.label;
+    if ($("#taskRoleActionHint")) $("#taskRoleActionHint").textContent = copy.hint;
+  }
+
+  function renderQueueTabs() {
+    const tab = currentQueueTab();
+    $$("[data-queue-tab]").forEach((button) => {
+      const active = button.dataset.queueTab === tab;
+      button.classList.toggle("selected", active);
+      button.setAttribute("aria-selected", String(active));
+    });
+    $$("[data-queue-panel]").forEach((panel) => {
+      panel.classList.toggle("hidden", panel.dataset.queuePanel !== tab);
+    });
   }
 
   function renderUiState() {
     const role = currentRole();
     const step = currentTaskStep();
-    $$("#roleSwitch [data-role]").forEach((button) => {
+    $$(".role-switch [data-role]").forEach((button) => {
       const restricted = button.dataset.role === "admin" || button.dataset.role === "creator";
       const systemRole = currentUser().systemRole;
       const allowed = button.dataset.role === "admin"
@@ -2729,28 +3355,38 @@
       button.hidden = restricted && !allowed;
       button.classList.toggle("active", button.dataset.role === role);
     });
+    $$(".creator-only").forEach((element) => {
+      element.classList.toggle("hidden", !canManageAdmins(role));
+    });
+    const canManage = canManageContent(role);
+    $("#advancedEntry")?.classList.toggle("hidden", !canManage);
+    $("#mobileAdvancedRow")?.classList.toggle("hidden", !canManage);
+    renderRoleNav();
+    renderQueueTabs();
     $$(".task-step").forEach((button) => {
       button.classList.toggle("active", button.dataset.step === step);
     });
-    $$(".nav-item, .mobile-nav").forEach((button) => {
-      const advancedButton = button.classList.contains("advanced-nav-item");
-      const activeView = $(".view.active")?.id?.replace("view-", "");
-      button.classList.toggle("active", advancedButton ? button.dataset.view === activeView : button.dataset.step === step);
-    });
+    const activeView = $(".view.active")?.id?.replace("view-", "") || "";
+    markActiveNav(activeView === "publish" ? "publish" : activeView);
     const advancedNav = $("#advancedNav");
     const toggle = $("#toggleAdvanced");
-    advancedNav?.classList.toggle("hidden", !state.ui.advancedOpen);
+    const showAdvanced = canManage && state.ui.advancedOpen;
+    advancedNav?.classList.toggle("hidden", !showAdvanced);
     if (toggle) {
       toggle.textContent = state.ui.advancedOpen ? "收起高级工具" : "高级工具";
-      toggle.setAttribute("aria-expanded", String(Boolean(state.ui.advancedOpen)));
+      toggle.setAttribute("aria-expanded", String(Boolean(showAdvanced)));
+      toggle.hidden = !canManage;
     }
     const readiness = profileReadiness(currentUser());
-    $("#profileReadiness").textContent = readiness.label;
-    $("#applicationProgress").textContent = applicationProgressLabel();
-    $("#captainQueue").textContent = `待审 ${pendingReviewCount()}`;
+    if ($("#profileReadiness")) $("#profileReadiness").textContent = readiness.label;
+    if ($("#applicationProgress")) {
+      const pending = pendingReviewCount();
+      $("#applicationProgress").textContent = role === "captain" ? `待审 ${pending}` : applicationProgressLabel();
+    }
     document.body.dataset.role = role;
     document.body.dataset.step = step;
     document.documentElement.dataset.theme = state.ui.theme || "light";
+    syncPublishLimit();
     const themeButton = $("#toggleTheme");
     if (themeButton) {
       const nextThemeLabel = state.ui.theme === "dark" ? "切换到浅色模式" : "切换到深色模式";
@@ -2842,6 +3478,16 @@
     renderGradeCohortOptions();
     const draft = activeDraftId ? state.drafts.find((item) => item.id === activeDraftId)?.data : null;
     renderCompetitionChecklist(normalizeDraftData(draft || {}).competitionIds || []);
+    $$("[data-bonus-type-select]").forEach((select) => {
+      const current = select.value;
+      if (current && !Array.from(select.options).some((option) => option.value === current)) {
+        const option = document.createElement("option");
+        option.value = current;
+        option.textContent = bonusTypeText(current);
+        select.append(option);
+      }
+      select.value = current;
+    });
   }
 
   function renderDrafts() {
@@ -2938,7 +3584,7 @@
       : `<div class="empty-state">
           <strong>暂时没有开放招募</strong>
           <p>新的队伍发布后会出现在这里。队长可以先发布一个清晰的项目题目和技能缺口。</p>
-          <button class="ghost-button" type="button" data-view-jump="publish" data-step-jump="review">发布招募</button>
+          <button class="ghost-button" type="button" data-view-jump="publish" data-step-jump="discover">发布招募</button>
         </div>`;
   }
 
@@ -3034,7 +3680,7 @@
         kind: "detail",
         label: "查看详情",
         reason: "队长身份下优先处理自己的审核任务。",
-        next: "切回申请者身份后再申请其他队伍。",
+        next: "切回队员身份后再申请其他队伍。",
       };
     }
     if (role === "admin") {
@@ -3042,7 +3688,7 @@
         kind: "detail",
         label: "查看详情",
         reason: "管理员身份只查看与维护，不提交申请。",
-        next: "需要申请时切回申请者身份。",
+        next: "需要申请时切回队员身份。",
       };
     }
     return {
@@ -3206,7 +3852,7 @@
         </div>
         ${
           canApply
-            ? `<label><span>申请留言</span><textarea id="applicationMessage" rows="4" placeholder="说明你的技能、时间投入和可承担工作"></textarea></label>
+            ? `<label><span>申请留言</span><textarea id="applicationMessage" rows="4" maxlength="2000" placeholder="说明你的技能、时间投入和可承担工作"></textarea></label>
                <button class="primary-button" type="button" data-submit-application="${item.id}">提交申请</button>`
             : `<div class="list-item"><h5>${escapeHtml(action.label)}</h5><p>${escapeHtml(action.reason)}</p><p class="file-meta">${escapeHtml(action.next)}</p></div>`
         }
@@ -3263,13 +3909,13 @@
           .map(
             (award) => `
               <div class="resume-award">
-                <strong>${escapeHtml(award.shortName || shortNameForAward(award.name))} ${escapeHtml(awardText(award.award))}</strong>
-                <span>${escapeHtml(award.name)} · ${escapeHtml(String(award.year || "未填年份"))} · ${escapeHtml(roleText(award.role, award.solo))}</span>
+                <strong>${escapeHtml(award.shortName || shortNameForAward(award))} ${escapeHtml(awardBadgeText(award))}</strong>
+                <span>${escapeHtml(awardKindText(award.kind))} · ${escapeHtml(award.name)} · ${escapeHtml(String(award.year || "未填年份"))}${award.kind === "competition" || !award.kind ? ` · ${escapeHtml(roleText(award.role, award.solo))}` : ""}</span>
               </div>
             `,
           )
           .join("")
-      : `<p class="file-meta">暂未添加竞赛履历。</p>`;
+      : `<p class="file-meta">暂未添加竞赛或成果履历。</p>`;
     $("#detailContent").innerHTML = `
       <div class="dialog-content resume-dialog-content">
         <div class="resume-header">
@@ -3339,8 +3985,8 @@
               <h5>${escapeHtml(award.name)}</h5>
               <button class="ghost-button" type="button" data-delete-award="${award.id}">删除</button>
             </header>
-            <div class="file-meta">${escapeHtml(award.shortName || shortNameForAward(award.name))} · ${award.year || "未填年份"} · ${awardLevelText(award.level)} · ${roleText(award.role, award.solo)}${award.bonusType ? ` · ${bonusTypeText(award.bonusType)}` : ""}</div>
-            <strong>${escapeHtml(awardText(award.award))}</strong>
+            <div class="file-meta">${escapeHtml(awardMetaLine(award))}</div>
+            <strong>${escapeHtml(awardBadgeText(award))}</strong>
           </div>
         `,
       )
@@ -3357,7 +4003,7 @@
     const missing = $("#profileStatusMissing");
     if (label) label.textContent = readiness.label;
     if (fill) fill.style.width = `${percent}%`;
-    if (hint) hint.textContent = readiness.ready ? "档案已达到申请门槛，可以进入找队伍。" : "补齐必填信息后，匹配解释会更准确。";
+    if (hint) hint.textContent = readiness.ready ? "档案已达到申请门槛，可以进入寻找队伍。" : "补齐必填信息后，匹配解释会更准确。";
     if (missing) missing.textContent = readiness.missing.length ? readiness.missing.join("、") : "无";
   }
 
@@ -3381,6 +4027,7 @@
       if (!field || key === "tags" || key === "contacts") return;
       field.value = value ?? "";
     });
+    if ($("#profileAccount")) $("#profileAccount").value = studentIdFromAccount(user.account);
     const visibility = $("#realNameVisibilityToggle");
     if (visibility) visibility.checked = user.realNameVisibility === "public" || user.realNameVisibility === "matched";
     renderNameVisibilitySwitch();
@@ -3391,10 +4038,11 @@
   }
 
   function renderMine() {
+    if (!$("#myRecruitments")) return;
     const mine = state.recruitments.filter((item) => item.publisherId === CURRENT_USER_ID);
     $("#myRecruitments").innerHTML = mine.length
       ? mine.map(myRecruitmentRow).join("")
-      : `<div class="empty-state"><strong>还没有发布招募</strong><p>发布一个项目后，队长可以在这里查看申请和队伍状态。</p><button class="ghost-button" type="button" data-view-jump="publish" data-step-jump="review">去发布招募</button></div>`;
+      : `<div class="empty-state"><strong>还没有发布招募</strong><p>发布一个项目后，队长可以在这里查看申请和队伍状态。</p><button class="ghost-button" type="button" data-view-jump="publish" data-step-jump="discover">去发布招募</button></div>`;
     const reviews = mine.flatMap((item) =>
       (item.applications || []).map((app) => ({
         recruitment: item,
@@ -3417,7 +4065,7 @@
       <div class="review-summary-main">
         <span class="eyebrow">队长待办</span>
         <strong>${pending ? `${pending} 份申请待处理` : "当前没有待处理申请"}</strong>
-        <p>${captain ? "先看能力标签和简历预览，再决定是否通过；通过后双方才会看到允许公开的联系方式。" : "当前是申请者身份。切换到队长后，待处理申请会显示通过和拒绝按钮。"}</p>
+        <p>${captain ? "先看能力标签和简历预览，再决定是否通过；通过后双方才会看到允许公开的联系方式。" : "当前是队员身份。切换到队长后，待处理申请会显示通过和拒绝按钮。"}</p>
       </div>
       <div class="review-summary-stats" aria-label="审核统计">
         <div><span>开放招募</span><strong>${open}</strong></div>
@@ -3465,7 +4113,7 @@
                 <button class="ghost-button danger" type="button" data-reject-app="${application.id}">拒绝</button>
               </div>`
             : application.status === "pending"
-              ? `<div class="action-note"><strong>切换到队长身份后处理</strong><span>申请者身份下不会显示审核操作。</span></div>`
+              ? `<div class="action-note"><strong>切换到队长身份后处理</strong><span>队员身份下不会显示审核操作。</span></div>`
               : ""
         }
       </article>
@@ -3499,6 +4147,7 @@
   }
 
   function renderMessages() {
+    if (!$("#notificationList")) return;
     const applications = userApplications();
     const pendingApps = applications.filter(({ application }) => application.status === "pending");
     const acceptedApps = applications.filter(({ application }) => application.status === "accepted");
@@ -3509,7 +4158,7 @@
     $("#notificationList").innerHTML =
       applications.length || state.messages.length
          ? `${applicationSummaryMarkup(pendingApps.length, acceptedApps.length, rejectedApps.length)}${applicationGroup("待审核", pendingApps)}${applicationGroup("匹配完成", acceptedApps)}${applicationGroup("已拒绝", rejectedApps)}${messageGroup("系统通知", otherMessages)}`
-        : `<div class="empty-state"><strong>还没有申请记录</strong><p>从“找队伍”选择一条匹配原因清晰的招募开始，提交后进度会在这里持续更新。</p><button class="ghost-button" type="button" data-view-jump="discover" data-step-jump="discover">去找队伍</button></div>`;
+        : `<div class="empty-state"><strong>还没有申请记录</strong><p>从“寻找队伍”选择一条匹配原因清晰的招募开始，提交后进度会在这里持续更新。</p><button class="ghost-button" type="button" data-view-jump="discover" data-step-jump="discover">去寻找队伍</button></div>`;
     $("#conversationList").innerHTML = conversations.length
       ? `${messageGroup("联系方式卡片", conversations.filter((item) => item.contact), conversationRow)}${messageGroup("站内对话", conversations.filter((item) => !item.contact), conversationRow)}`
       : `<div class="list-item"><h5>暂无站内对话</h5></div>`;
@@ -3600,124 +4249,333 @@
     `;
   }
 
+  function paginateItems(items, page, size = ADMIN_PAGE_SIZE) {
+    const total = items.length;
+    const pages = Math.max(1, Math.ceil(total / size));
+    const current = Math.min(Math.max(1, page), pages);
+    const start = (current - 1) * size;
+    return { page: current, pages, total, items: items.slice(start, start + size) };
+  }
+
+  function renderAdminPager(container, page, pages) {
+    if (!container) return;
+    if (pages <= 1) {
+      container.innerHTML = "";
+      return;
+    }
+    const buttons = [];
+    if (page > 1) buttons.push(`<button class="ghost-button" type="button" data-admin-page="${page - 1}">上一页</button>`);
+    buttons.push(`<span class="file-meta">${page} / ${pages}</span>`);
+    if (page < pages) buttons.push(`<button class="ghost-button" type="button" data-admin-page="${page + 1}">下一页</button>`);
+    container.innerHTML = buttons.join("");
+  }
+
+  function adminRow(title, meta, actions) {
+    return `
+      <div class="list-item admin-row">
+        <header>
+          <h5>${title}</h5>
+          <div class="item-actions">${actions}</div>
+        </header>
+        <span class="file-meta">${meta}</span>
+      </div>
+    `;
+  }
+
   function renderAdmin() {
-    $("#adminTags").innerHTML = state.tags
-      .map((tag) => `<span class="chip">${escapeHtml(tag.name)} <button type="button" class="ghost-button" data-delete-tag="${tag.id}">删</button></span>`)
-      .join("");
-    $("#adminCompetitions").innerHTML = state.competitions
-      .map(
-        (item) => `
-          <div class="list-item">
-            <header><h5>${escapeHtml(item.name)}</h5><button class="ghost-button" type="button" data-delete-competition="${item.id}">停用</button></header>
-            <span class="file-meta">${escapeHtml(item.level)} · 别名：${escapeHtml((item.aliases || []).join("、") || "未设置")}${item.bonusType ? ` · ${escapeHtml(bonusTypeText(item.bonusType))}` : ""}</span>
-            <div class="item-actions">
-              <button class="ghost-button" type="button" data-edit-competition="${item.id}">维护别名</button>
-              <button class="ghost-button" type="button" data-merge-competition="${item.id}">合并重复项</button>
-            </div>
-          </div>
-        `,
-      )
-      .join("");
-    $("#adminProjects").innerHTML = (state.projects || []).filter((project) => project.active !== false).length
-      ? (state.projects || [])
-          .filter((project) => project.active !== false)
-          .map(
-            (project) => `
-              <div class="list-item">
-                <header><h5>${escapeHtml(project.title)}</h5><button class="ghost-button danger" type="button" data-delete-project="${project.id}">停用</button></header>
-                <span class="file-meta">${programLabelMarkup(programById(project.programId))} · ${escapeHtml(project.source === "library" ? "项目库" : "自定义")}</span>
-              </div>
-            `,
-          )
+    if (!$("#adminProjects")) return;
+    $$("[data-admin-tab]").forEach((button) => {
+      button.classList.toggle("selected", button.dataset.adminTab === adminTab);
+    });
+    $$("[data-admin-panel]").forEach((panel) => {
+      panel.classList.toggle("hidden", panel.dataset.adminPanel !== adminTab);
+    });
+    const projectQuery = normalizeSearchText($("#adminProjectSearch")?.value || "");
+    const projects = (state.projects || []).filter((project) => {
+      if (project.active === false) return false;
+      if (!projectQuery) return true;
+      return normalizeSearchText([project.title, project.college, project.advisor, project.summary].filter(Boolean).join(" ")).includes(projectQuery);
+    });
+    projects.sort((a, b) => String(a.college || "").localeCompare(String(b.college || ""), "zh") || String(a.title || "").localeCompare(String(b.title || ""), "zh"));
+    const projectPage = paginateItems(projects, adminProjectPage);
+    adminProjectPage = projectPage.page;
+    $("#adminProjects").innerHTML = projectPage.items.length
+      ? `<p class="file-meta">共 ${projectPage.total} 条参考题目，本页 ${projectPage.items.length} 条。</p>${projectPage.items
+          .map((project) => adminRow(
+            escapeHtml(project.title),
+            `${programLabelMarkup(programById(project.programId))} · ${escapeHtml(project.college || "未标学院")} · ${escapeHtml(project.advisor || "未标导师")} · 参考题目`,
+            `<button class="ghost-button" type="button" data-edit-project="${project.id}">修改</button><button class="ghost-button danger" type="button" data-delete-project="${project.id}">停用</button>`,
+          ))
+          .join("")}`
+      : `<div class="list-item"><h5>${projectQuery ? "没有匹配的项目" : "项目库为空"}</h5></div>`;
+    renderAdminPager($("#adminProjectPager"), projectPage.page, projectPage.pages);
+
+    const competitionQuery = normalizeSearchText($("#adminCompetitionSearch")?.value || "");
+    const competitions = (state.competitions || []).filter((item) => {
+      if (!competitionQuery) return true;
+      return normalizeSearchText([item.name, item.level, item.bonusNote, item.remark, bonusTypeText(item.bonusType), ...(item.aliases || [])].filter(Boolean).join(" ")).includes(competitionQuery);
+    });
+    const competitionPage = paginateItems(competitions, adminCompetitionPage);
+    adminCompetitionPage = competitionPage.page;
+    $("#adminCompetitions").innerHTML = competitionPage.items.length
+      ? competitionPage.items
+          .map((item) => adminRow(
+            escapeHtml(item.name),
+            `${escapeHtml(item.level || "")} · ${escapeHtml((item.aliases || []).join("、") || "无别名")} · ${escapeHtml(bonusTypeText(item.bonusType))}`,
+            `<button class="ghost-button" type="button" data-edit-competition="${item.id}">修改</button><button class="ghost-button danger" type="button" data-delete-competition="${item.id}">停用</button>`,
+          ))
           .join("")
-      : `<div class="list-item"><h5>项目库为空</h5></div>`;
+      : `<div class="list-item"><h5>没有匹配的竞赛</h5></div>`;
+    renderAdminPager($("#adminCompetitionPager"), competitionPage.page, competitionPage.pages);
+
+    const tagQuery = normalizeSearchText($("#adminTagSearch")?.value || "");
+    const tags = (state.tags || []).filter((tag) => !tagQuery || normalizeSearchText(tag.name).includes(tagQuery));
+    const tagPage = paginateItems(tags, adminTagPage);
+    adminTagPage = tagPage.page;
+    $("#adminTags").innerHTML = tagPage.items.length
+      ? tagPage.items
+          .map((tag) => adminRow(
+            escapeHtml(tag.name),
+            "官方标签",
+            `<button class="ghost-button" type="button" data-edit-tag="${tag.id}">修改</button><button class="ghost-button danger" type="button" data-delete-tag="${tag.id}">停用</button>`,
+          ))
+          .join("")
+      : `<div class="list-item"><h5>没有匹配的标签</h5></div>`;
+    renderAdminPager($("#adminTagPager"), tagPage.page, tagPage.pages);
+
     const rolePanel = $("#adminRolePanel");
+    $$(".creator-only").forEach((element) => {
+      element.classList.toggle("hidden", !canManageAdmins(currentRole()));
+    });
+    if (!canManageAdmins(currentRole()) && adminTab === "roles") {
+      adminTab = "projects";
+      $$("[data-admin-tab]").forEach((button) => {
+        button.classList.toggle("selected", button.dataset.adminTab === adminTab);
+      });
+      $$("[data-admin-panel]").forEach((panel) => {
+        panel.classList.toggle("hidden", panel.dataset.adminPanel !== adminTab);
+      });
+    }
     if (rolePanel) rolePanel.classList.toggle("hidden", !canManageAdmins(currentRole()));
-    if (canManageAdmins(currentRole())) {
-      $("#adminUsers").innerHTML = state.users
-        .filter((user) => user.id !== state.platform.creatorId)
-        .map(
-          (user) => `
+    if (canManageAdmins(currentRole()) && $("#adminUsers")) {
+      const userQuery = normalizeSearchText($("#adminUserSearch")?.value || "");
+      const members = state.users.filter((user) => {
+        if (user.id === state.platform.creatorId) return false;
+        if (!userQuery) return true;
+        return normalizeSearchText([user.nickname, user.college, user.account].filter(Boolean).join(" ")).includes(userQuery);
+      });
+      $("#adminUsers").innerHTML = members.length
+        ? members.map(
+            (user) => `
             <div class="list-item role-user-row">
               <div>
                 <h5>${escapeHtml(user.nickname)}</h5>
-                <span class="file-meta">${escapeHtml(user.college || "未填写学院")} · ${user.systemRole === "admin" ? "系统管理员" : "普通成员"}</span>
+                <span class="file-meta">${escapeHtml(user.college || "未填写学院")} · ${user.systemRole === "admin" ? "管理员" : "普通成员"}</span>
               </div>
               ${user.systemRole === "admin" ? `<button class="ghost-button danger" type="button" data-revoke-admin="${user.id}">撤销管理员</button>` : `<button class="ghost-button" type="button" data-appoint-admin="${user.id}">任命管理员</button>`}
             </div>
           `,
-        )
-        .join("");
+          ).join("")
+        : `<div class="list-item"><h5>${userQuery ? "没有匹配的成员" : "暂无可任免成员"}</h5></div>`;
       const logs = state.platform.auditLog || [];
       $("#adminAuditLog").innerHTML = logs.length
-        ? `<h5>最近操作</h5>${logs.slice(0, 5).map((log) => `<div class="file-meta">${log.action === "appoint_admin" ? "任命管理员" : "撤销管理员"} · ${escapeHtml(userById(log.targetId).nickname)} · ${formatTime(log.createdAt)}</div>`).join("")}`
+        ? `<h5>任免记录</h5>${logs.map((log) => `<div class="file-meta">${log.action === "appoint_admin" ? "任命管理员" : "撤销管理员"} · ${escapeHtml(log.detail || ((state.users || []).find((item) => item.id === log.targetId) || {}).nickname || "")} · ${formatTime(log.createdAt)}</div>`).join("")}`
         : `<p class="file-meta">暂无任免记录</p>`;
-    } else {
-      $("#adminUsers").innerHTML = `<div class="list-item"><h5>权限受限</h5><p class="file-meta">切换到平台创建者身份后管理系统管理员。</p></div>`;
-      $("#adminAuditLog").innerHTML = "";
+    } else if ($("#adminUsers")) {
+      $("#adminUsers").innerHTML = `<div class="list-item"><h5>权限受限</h5><p class="file-meta">切换到创建者身份后管理管理员。</p></div>`;
+      if ($("#adminAuditLog")) $("#adminAuditLog").innerHTML = "";
     }
-    const pendingCustom = state.customTags.filter((tag) => tag.status === "pending");
-    $("#customTagReview").innerHTML = pendingCustom.length
-      ? pendingCustom
-          .map(
-            (tag) => `
-            <div class="list-item">
-              <header><h5>${escapeHtml(tag.name)}</h5><span class="file-meta">${escapeHtml(tag.requester)}</span></header>
-              <div class="item-actions">
-                <button class="primary-button" type="button" data-approve-tag="${tag.id}">通过</button>
-                <button class="ghost-button danger" type="button" data-reject-tag="${tag.id}">拒绝</button>
+    const pendingCustom = (state.customTags || []).filter((tag) => tag.status === "pending");
+    if ($("#customTagReview")) {
+      $("#customTagReview").innerHTML = pendingCustom.length
+        ? pendingCustom
+            .map(
+              (tag) => `
+              <div class="list-item">
+                <header><h5>${escapeHtml(tag.name)}</h5><span class="file-meta">${escapeHtml(tag.requester)}</span></header>
+                <div class="item-actions">
+                  <button class="primary-button" type="button" data-approve-tag="${tag.id}">通过</button>
+                  <button class="ghost-button danger" type="button" data-reject-tag="${tag.id}">拒绝</button>
+                </div>
               </div>
-            </div>
-          `,
-          )
-          .join("")
-      : `<div class="list-item"><h5>暂无待审标签</h5></div>`;
+            `,
+            )
+            .join("")
+        : `<div class="list-item"><h5>暂无待审标签</h5></div>`;
+    }
+    const pendingProposals = (state.catalogProposals || []).filter((item) => item.status === "pending");
+    if ($("#catalogProposalReview")) {
+      $("#catalogProposalReview").innerHTML = pendingProposals.length
+        ? pendingProposals
+            .map((item) => {
+              const body = item.payload || {};
+              const kindLabel = item.kind === "competition_patch" ? "修正" : "收录";
+              return `
+                <div class="list-item">
+                  <header><h5>${escapeHtml(body.name || "未填写名称")}</h5><span class="file-meta">${kindLabel} · ${escapeHtml(item.requester || "")}</span></header>
+                  <p class="file-meta">${escapeHtml(body.level || "")} · ${escapeHtml(bonusTypeText(body.bonusType))} · ${escapeHtml((body.aliases || []).join("、") || "无别名")}</p>
+                  ${body.note ? `<p>${escapeHtml(body.note)}</p>` : ""}
+                  <div class="item-actions">
+                    <button class="primary-button" type="button" data-approve-proposal="${item.id}">通过</button>
+                    <button class="ghost-button danger" type="button" data-reject-proposal="${item.id}">驳回</button>
+                  </div>
+                </div>
+              `;
+            })
+            .join("")
+        : `<div class="list-item"><h5>暂无待审竞赛提案</h5></div>`;
+    }
     const open = state.recruitments.filter((item) => item.status === "open").length;
     const accepted = state.recruitments.flatMap((item) => item.applications || []).filter((app) => app.status === "accepted").length;
     const pendingApps = state.recruitments.flatMap((item) => item.applications || []).filter((app) => app.status === "pending").length;
     const reports = state.reports.filter((item) => item.status === "pending").length;
-    $("#adminStats").innerHTML = [
-      ["开放招募", open],
-      ["成功匹配", accepted],
-      ["待审申请", pendingApps],
-      ["待处理举报", reports],
-    ]
-      .map(([label, value]) => `<div class="stat-box"><span>${label}</span><strong>${value}</strong></div>`)
-      .join("");
-    $("#reportList").innerHTML = state.reports.length
-      ? state.reports
-          .map(
-            (report) => `
-          <div class="list-item">
-            <header><h5>${escapeHtml(report.title)}</h5><span class="file-meta">${report.status === "resolved" ? "已处理" : "待处理"}</span></header>
-            <p>${escapeHtml(report.body)}</p>
-            ${report.status !== "resolved" ? `<button class="ghost-button" type="button" data-resolve-report="${report.id}">标记处理</button>` : ""}
-          </div>
-        `,
-          )
-          .join("")
-      : `<div class="list-item"><h5>暂无举报</h5></div>`;
+    if ($("#adminStats")) {
+      $("#adminStats").innerHTML = [
+        ["开放招募", open],
+        ["成功匹配", accepted],
+        ["待审申请", pendingApps],
+        ["待处理举报", reports],
+      ]
+        .map(([label, value]) => `<div class="stat-box"><span>${label}</span><strong>${value}</strong></div>`)
+        .join("");
+    }
+    if ($("#reportList")) {
+      $("#reportList").innerHTML = state.reports.length
+        ? state.reports
+            .map(
+              (report) => `
+            <div class="list-item">
+              <header><h5>${escapeHtml(report.title)}</h5><span class="file-meta">${report.status === "resolved" ? "已处理" : "待处理"}</span></header>
+              <p>${escapeHtml(report.body)}</p>
+              ${report.status !== "resolved" ? `<button class="ghost-button" type="button" data-resolve-report="${report.id}">标记处理</button>` : ""}
+            </div>
+          `,
+            )
+            .join("")
+        : `<div class="list-item"><h5>暂无举报</h5></div>`;
+    }
   }
 
   function renderFiles() {
-    $("#fileLibrary").innerHTML = state.files.length
-      ? state.files
-          .map(
-            (file) => `
-          <article class="file-row">
-            <div>
-              <h5>${escapeHtml(file.name)}</h5>
-              <div class="file-meta">${escapeHtml(scopeText(file.scope))} · ${escapeHtml(file.type || "unknown")} · ${formatBytes(file.size)} · ${formatTime(file.createdAt)}</div>
-            </div>
-            <div class="item-actions">
-              <button class="ghost-button" type="button" data-download-file="${file.id}" ${file.dataUrl ? "" : "disabled"}>下载</button>
-              <button class="ghost-button danger" type="button" data-delete-file="${file.id}">删除</button>
-            </div>
-          </article>
-        `,
-          )
+    return;
+  }
+
+  function renderGuideTable(block, fallbackTitle = "") {
+    if (!block || !Array.isArray(block.rows) || !block.rows.length) return "";
+    const headers = Array.isArray(block.headers) ? block.headers : [];
+    const notes = Array.isArray(block.notes) ? block.notes : [];
+    return `
+      <article class="bonus-rule-card">
+        <h4>${escapeHtml(block.title || fallbackTitle)}</h4>
+        <table class="bonus-table">
+          <thead><tr>${headers.map((header) => `<th>${escapeHtml(String(header))}</th>`).join("")}</tr></thead>
+          <tbody>
+            ${block.rows
+              .map(
+                (row) =>
+                  `<tr>${(Array.isArray(row) ? row : [row]).map((cell) => `<td>${escapeHtml(String(cell))}</td>`).join("")}</tr>`,
+              )
+              .join("")}
+          </tbody>
+        </table>
+        ${notes.map((note) => `<p class="file-meta">${escapeHtml(String(note))}</p>`).join("")}
+      </article>
+    `;
+  }
+
+  function renderBonusCatalog() {
+    const body = $("#bonusTableBody");
+    if (!body) return;
+    const guide = state.bonusGuide || {};
+    if ($("#bonusSource")) $("#bonusSource").textContent = guide.source || "2024 版 64 项科技竞赛加分项目";
+    if ($("#bonusScope")) $("#bonusScope").textContent = guide.scope || "";
+    if ($("#bonusConclusions")) {
+      $("#bonusConclusions").innerHTML = (guide.conclusions || [])
+        .map((item) => `<li>${escapeHtml(String(item))}</li>`)
+        .join("");
+    }
+    if ($("#bonusRules")) {
+      $("#bonusRules").innerHTML = [
+        renderGuideTable(guide.scoring, "科技竞赛优秀加分"),
+        renderGuideTable(guide.extraBonus),
+        renderGuideTable(guide.challengeSpecials),
+      ].join("");
+    }
+    if ($("#bonusUses")) $("#bonusUses").textContent = guide.uses || "";
+    $$("[data-bonus-filter]").forEach((button) => {
+      button.classList.toggle("selected", button.dataset.bonusFilter === bonusFilter);
+    });
+    const query = normalizeSearchText($("#bonusSearch")?.value || "");
+    const rows = (state.competitions || []).filter((item) => {
+      const group = item.catalogGroup || "hit_2024";
+      if (bonusFilter === "extra" && !item.extraBonus) return false;
+      if (bonusFilter === "school" && group !== "school") return false;
+      if (bonusFilter !== "school" && bonusFilter !== "all" && bonusFilter !== "extra" && group === "school") return false;
+      if (!query) return true;
+      const haystack = [
+        item.sort,
+        item.name,
+        item.level,
+        item.bonusNote,
+        item.remark,
+        bonusTypeText(item.bonusType),
+        ...(item.aliases || []),
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return normalizeSearchText(haystack).includes(query);
+    });
+    const officialCount = (state.competitions || []).filter((item) => (item.catalogGroup || "hit_2024") === "hit_2024").length;
+    if ($("#bonusStats")) {
+      $("#bonusStats").textContent = `清单 ${officialCount} 项 · 当前显示 ${rows.length} 项`;
+    }
+    body.innerHTML = rows.length
+      ? rows
+          .map((item) => {
+            const group = item.catalogGroup || "hit_2024";
+            const indexLabel = group === "school" ? "校" : item.sort || "—";
+            const extra = item.extraBonus ? `<span class="chip extra-bonus-chip">额外加分</span>` : "";
+            return `
+              <tr>
+                <td>${escapeHtml(String(indexLabel))}</td>
+                <td>
+                  <strong>${escapeHtml(item.name)}</strong>
+                  ${item.aliases?.length ? `<div class="file-meta">${escapeHtml(item.aliases.join(" / "))}</div>` : ""}
+                  ${extra}
+                </td>
+                <td>${escapeHtml(item.level || "")}</td>
+                <td>${escapeHtml(item.bonusNote || bonusTypeText(item.bonusType) || "无加分")}</td>
+                <td>${escapeHtml(item.remark || "")}</td>
+                <td>
+                  <div class="item-actions">
+                    <button class="ghost-button" type="button" data-propose-patch="${item.id}">申请修正</button>
+                    ${canManageContent() ? `<button class="ghost-button danger" type="button" data-bonus-deactivate="${item.id}">停用</button>` : ""}
+                  </div>
+                </td>
+              </tr>
+            `;
+          })
           .join("")
-      : `<div class="list-item"><h5>本地文件库为空</h5><p class="file-meta">上传头像、招募附件或在文件管理页入库后会显示在这里。</p></div>`;
+      : `<tr><td colspan="6">没有符合筛选条件的竞赛。</td></tr>`;
+    syncProposalForm();
+    renderMyCatalogProposals();
+  }
+
+  function renderMyCatalogProposals() {
+    const box = $("#myCatalogProposals");
+    if (!box) return;
+    const mine = (state.catalogProposals || []).slice(0, 8);
+    if (!mine.length) {
+      box.innerHTML = `<p class="file-meta">提交后的收录和修正申请会显示在这里。</p>`;
+      return;
+    }
+    const statusText = { pending: "待审", approved: "已通过", rejected: "已驳回" };
+    box.innerHTML = mine
+      .map((item) => {
+        const body = item.payload || {};
+        return `<div class="list-item"><header><h5>${escapeHtml(body.name || "未填写名称")}</h5><span class="file-meta">${item.kind === "competition_patch" ? "修正" : "收录"} · ${statusText[item.status] || item.status}</span></header><p class="file-meta">${escapeHtml(body.note || body.bonusNote || "")}</p></div>`;
+      })
+      .join("");
   }
 
   function addMessage(kind, title, body, contact = "") {
@@ -3864,7 +4722,7 @@
   }
 
   function userById(id) {
-    return state.users.find((user) => user.id === id) || currentUser();
+    return state.users.find((user) => user.id === id) || normalizeAuthUser({ id: id || "", nickname: "未知用户" });
   }
 
   function privacyLine(user, matched) {
@@ -3909,7 +4767,7 @@
   }
 
   function bonusTypeText(type) {
-    return { lower_grade: "降等加分", no_lower_grade: "不降等加分" }[type] || type;
+    return BONUS_TYPE_LABELS[type] || type || "";
   }
 
   function roleText(role, solo = false) {
@@ -3919,6 +4777,41 @@
 
   function awardText(award) {
     return { special: "特等奖", first: "一等奖", second: "二等奖", third: "三等奖", excellent: "优秀奖/参与奖" }[award] || award;
+  }
+
+  function awardKindText(kind) {
+    return AWARD_KIND_LABELS[kind] || AWARD_KIND_LABELS.competition;
+  }
+
+  function paperVenueText(venue) {
+    return PAPER_VENUE_LABELS[venue] || venue || "";
+  }
+
+  function scholarshipTypeText(type) {
+    return SCHOLARSHIP_TYPE_LABELS[type] || type || "";
+  }
+
+  function awardBadgeText(award = {}) {
+    const kind = award.kind || "competition";
+    if (kind === "paper") return paperVenueText(award.paperVenue) || "论文";
+    if (kind === "patent") return "专利";
+    if (kind === "software") return "软件著作权";
+    if (kind === "scholarship") return scholarshipTypeText(award.scholarshipType) || "奖学金";
+    return awardText(award.award);
+  }
+
+  function awardMetaLine(award = {}) {
+    const kind = award.kind || "competition";
+    const parts = [awardKindText(kind), award.shortName || shortNameForAward(award), award.year || "未填年份"];
+    if (kind === "competition") {
+      parts.push(awardLevelText(award.level), roleText(award.role, award.solo));
+      if (award.bonusType) parts.push(bonusTypeText(award.bonusType));
+    } else if (kind === "paper") {
+      parts.push(paperVenueText(award.paperVenue));
+    } else if (kind === "scholarship") {
+      parts.push(scholarshipTypeText(award.scholarshipType));
+    }
+    return parts.filter(Boolean).join(" · ");
   }
 
   function getMultiValues(select) {

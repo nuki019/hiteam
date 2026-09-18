@@ -1,0 +1,122 @@
+{
+  "source": "校本教务〔2024〕18 号 · 2024 版 64 项科技竞赛加分项目",
+  "scope": "未来技术学院 2023 级第二轮综合考试口径。2024-05-01 及以后获奖按本清单；此前按 2020 版 51 项。",
+  "conclusions": [
+    "综测成绩 = 前三学年平均学分绩 + 优秀加分（满分 5 分）+ 额外加分（满分 5 分）。",
+    "科技竞赛项内不累计，取最高奖项。集体项目超过 5 人时只给前 5 人加分。",
+    "中国国际大学生创新大赛和挑战杯系列另有高水平赛事额外加分，只对代表学校参赛获国家级奖项的核心成员（前 5 名）执行。"
+  ],
+  "scoring": {
+    "headers": ["获奖等级", "个人项目", "集体项目排名第 1", "集体项目其他成员"],
+    "rows": [
+      ["国际或国家级一等奖", "5", "5", "3"],
+      ["国际或国家级二等奖", "3", "3", "1.8"],
+      ["国际或国家级三等奖", "1", "1", "0.6"]
+    ],
+    "notes": [
+      "降等加分按降低一个等级执行：一等奖按二等奖分值，二等奖按三等奖分值。",
+      "未列出特等奖规则的竞赛，如评出特等奖，一般按一等奖执行。",
+      "未从学校报名参赛的获奖，除学校组织与外校联合报名等情况外，不计入优秀加分。"
+    ]
+  },
+  "extraBonus": {
+    "title": "中国国际大学生创新大赛和挑战杯额外加分",
+    "headers": ["高水平赛事获奖等级", "学生排名", "额外加分"],
+    "rows": [
+      ["入围中国国际大学生创新大赛冠军赛", "第 1", "5"],
+      ["入围中国国际大学生创新大赛冠军赛", "第 2 至第 5", "3"],
+      ["国创金奖；挑战杯金奖/特等奖/一等奖", "第 1", "4"],
+      ["国创金奖；挑战杯金奖/特等奖/一等奖", "第 2 至第 5", "2.4"],
+      ["国创银奖；挑战杯银奖/二等奖", "第 1", "2.5"],
+      ["国创银奖；挑战杯银奖/二等奖", "第 2 至第 5", "1.5"],
+      ["国创铜奖；挑战杯铜奖/三等奖", "第 1", "1"],
+      ["国创铜奖；挑战杯铜奖/三等奖", "第 2 至第 5", "0.6"]
+    ],
+    "notes": ["以上额外加分按最高项执行，不重复加分。"]
+  },
+  "challengeSpecials": {
+    "title": "挑战杯专项赛调整",
+    "headers": ["专项赛类型", "获奖等级", "折算为优秀加分等级"],
+    "rows": [
+      ["中国青年科技创新揭榜挂帅擂台赛", "擂主", "国际或国家级一等奖"],
+      ["中国青年科技创新揭榜挂帅擂台赛", "特等奖/一等奖", "国际或国家级二等奖"],
+      ["中国青年科技创新揭榜挂帅擂台赛", "二等奖", "国际或国家级三等奖"],
+      ["中国青年科技创新揭榜挂帅擂台赛", "三等奖", "不加分"],
+      ["挑战杯其他专项赛（含人工智能+）", "特等奖第一名/金奖第一名", "国际或国家级一等奖"],
+      ["挑战杯其他专项赛（含人工智能+）", "特等奖/金奖/一等奖", "国际或国家级二等奖"],
+      ["挑战杯其他专项赛（含人工智能+）", "银奖/二等奖", "国际或国家级三等奖"],
+      ["挑战杯其他专项赛（含人工智能+）", "铜奖/三等奖", "不加分"]
+    ]
+  },
+  "uses": "除了创新学分、保研加分和奖金以外，很多竞赛可以丰富简历；对于某些不在加分名单的高水平竞赛，可以直接提供就业和实习方向。",
+  "competitions": [
+    {"id": "general-innovation", "sort": 1, "name": "中国国际大学生创新大赛", "aliases": ["国创", "创新赛", "互联网+"], "level": "国家", "bonusType": "extra_bonus", "extraBonus": true, "bonusNote": "另有高水平赛事额外加分", "remark": "全国顶级创新创业赛事，优先级最高"},
+    {"id": "challenge-cup", "sort": 2, "name": "“挑战杯”全国大学生课外学术科技作品竞赛", "aliases": ["挑战杯", "挑战杯课外", "大挑"], "level": "国家", "bonusType": "special_as_first", "extraBonus": true, "bonusNote": "特等奖和一等奖均按一等奖加分；另有高水平赛事额外加分", "remark": "全国顶级学术科技作品赛事"},
+    {"id": "challenge-cup-startup", "sort": 3, "name": "“挑战杯”中国大学生创业计划大赛", "aliases": ["小挑", "挑战杯创业"], "level": "国家", "bonusType": "extra_bonus", "extraBonus": true, "bonusNote": "另有高水平赛事额外加分", "remark": "挑战杯体系核心赛事"},
+    {"id": "hit-2024-04", "sort": 4, "name": "全国大学生创新年会", "aliases": ["创新年会", "年会"], "level": "国家", "bonusType": "year_meeting", "extraBonus": false, "bonusNote": "年会获奖按国家一等奖，入围年会决赛并参会按国家二等奖", "remark": "大创体系成果展示，政策分值高"},
+    {"id": "hit-2024-05", "sort": 5, "name": "全国航空航天模型锦标赛", "aliases": ["航模锦标赛"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "航空航天方向强，跨专业声量中等"},
+    {"id": "hit-2024-06", "sort": 6, "name": "全国周培源大学生力学竞赛", "aliases": ["周培源力学"], "level": "国家", "bonusType": "special_as_first", "extraBonus": false, "bonusNote": "特等奖和一等奖均按一等奖加分", "remark": "力学领域老牌竞赛"},
+    {"id": "hit-2024-07", "sort": 7, "name": "全国大学生集成电路创新创业大赛", "aliases": ["集成电路大赛", "IC 创新创业"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "电子信息/芯片方向认可强"},
+    {"id": "hit-2024-08", "sort": 8, "name": "iCAN 大学生创新创业大赛", "aliases": ["iCAN"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "创新创业与工程应用类"},
+    {"id": "hit-2024-09", "sort": 9, "name": "全国大学生物联网设计竞赛", "aliases": ["物联网设计"], "level": "国家", "bonusType": "lower_grade_no_third", "extraBonus": false, "bonusNote": "一、二等奖降等加分，三等奖不加分", "remark": "物联网方向认可较强，但分值降等"},
+    {"id": "hit-2024-10", "sort": 10, "name": "全国大学生嵌入式芯片与系统设计竞赛", "aliases": ["嵌入式芯片", "系统设计竞赛"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "嵌入式/芯片方向认可强"},
+    {"id": "hit-2024-11", "sort": 11, "name": "“大唐杯”全国大学生新一代信息通信技术大赛", "aliases": ["大唐杯"], "level": "国家", "bonusType": "lower_grade_no_third", "extraBonus": false, "bonusNote": "一、二等奖降等加分，三等奖不加分", "remark": "通信方向权威度较好，分值降等"},
+    {"id": "hit-2024-12", "sort": 12, "name": "全国大学生机械创新设计大赛", "aliases": ["机械创新"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "机械类核心赛事"},
+    {"id": "hit-2024-13", "sort": 13, "name": "中国大学生工程实践与创新能力大赛", "aliases": ["工程实践", "工创赛"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "工程训练/实践类核心赛事"},
+    {"id": "robomaster", "sort": 14, "name": "全国大学生机器人大赛 RoboMaster、RoboCon、ABU RoboCon", "aliases": ["RoboMaster", "RoboCon", "机甲大师"], "level": "国家", "bonusType": "special_as_first", "extraBonus": false, "bonusNote": "特等奖和一等奖均按一等奖加分", "remark": "机器人方向高强度工程赛事"},
+    {"id": "hit-2024-15", "sort": 15, "name": "全国大学生先进成图技术与产品信息建模创新大赛", "aliases": ["先进成图", "成图大赛"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "机械/工程制图方向认可稳定"},
+    {"id": "hit-2024-16", "sort": 16, "name": "全国三维数字化创新设计大赛", "aliases": ["三维数字化", "3D 创新设计"], "level": "国家", "bonusType": "special_as_first", "extraBonus": false, "bonusNote": "特等奖和一等奖均按一等奖加分", "remark": "数字化设计方向，分值友好"},
+    {"id": "hit-2024-17", "sort": 17, "name": "中国大学生机械工程创新创意大赛", "aliases": ["机械工程创新创意"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "含过程装备、铸造、热处理、物流技术等赛项"},
+    {"id": "hit-2024-18", "sort": 18, "name": "中国高校智能机器人创意大赛", "aliases": ["智能机器人创意"], "level": "国家", "bonusType": "special_as_first", "extraBonus": false, "bonusNote": "特等奖和一等奖均按一等奖加分", "remark": "智能机器人方向认可较强"},
+    {"id": "hit-2024-19", "sort": 19, "name": "国际大学生智能农业装备创新大赛", "aliases": ["智能农业装备"], "level": "国际", "bonusType": "lower_grade", "extraBonus": false, "bonusNote": "特、一、二等奖降等加分", "remark": "农业装备方向较专门"},
+    {"id": "hit-2024-20", "sort": 20, "name": "中美青年创客大赛", "aliases": ["中美创客"], "level": "国际", "bonusType": "special_as_first", "extraBonus": false, "bonusNote": "特等奖和一等奖均按一等奖加分", "remark": "创客/工程应用类，跨学科属性强"},
+    {"id": "hit-2024-21", "sort": 21, "name": "全国大学生金相技能大赛", "aliases": ["金相技能"], "level": "国家", "bonusType": "lower_grade_no_third", "extraBonus": false, "bonusNote": "获个人奖；一、二等奖降等加分，三等奖不加分", "remark": "材料方向技能类核心赛事，分值降等"},
+    {"id": "hit-2024-22", "sort": 22, "name": "全国大学生节能减排社会实践与科技竞赛", "aliases": ["节能减排"], "level": "国家", "bonusType": "track_specific", "extraBonus": false, "bonusNote": "主赛道特等和一等按一等；海洋与岛礁赛一、二等降等、三等不加；港澳台国际组金奖按二等、银奖按三等、铜奖不加", "remark": "能源/环保方向高认可，注意赛道差异"},
+    {"id": "hit-2024-23", "sort": 23, "name": "全国大学生电子设计竞赛（含专题邀请赛）", "aliases": ["电子设计竞赛", "电赛"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "电子信息类最硬赛事之一"},
+    {"id": "hit-2024-24", "sort": 24, "name": "全国大学生智能汽车竞赛", "aliases": ["智能车", "飞思卡尔"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "自动化/控制/车辆方向认可强"},
+    {"id": "hit-2024-25", "sort": 25, "name": "中国工业智能挑战赛", "aliases": ["工业智能挑战赛"], "level": "国家", "bonusType": "special_as_first", "extraBonus": false, "bonusNote": "特等奖和一等奖均按一等奖加分", "remark": "工业智能方向，专业相关时价值高"},
+    {"id": "hit-2024-26", "sort": 26, "name": "“西门子杯”中国智能制造挑战赛", "aliases": ["西门子杯"], "level": "国家", "bonusType": "special_as_first", "extraBonus": false, "bonusNote": "特等奖和一等奖均按一等奖加分", "remark": "智能制造方向老牌赛事"},
+    {"id": "hit-2024-27", "sort": 27, "name": "全国高校 BIM 毕业设计创新大赛", "aliases": ["BIM 毕业设计"], "level": "国家", "bonusType": "lower_grade_no_third", "extraBonus": false, "bonusNote": "一、二等奖降等，三等奖不加；如有特等奖，特等奖按一等奖", "remark": "土建/BIM 方向认可强，分值降等"},
+    {"id": "hit-2024-28", "sort": 28, "name": "中国（国际）传感器创新创业大赛", "aliases": ["传感器大赛"], "level": "国际", "bonusType": "special_as_first", "extraBonus": false, "bonusNote": "特等奖和一等奖均按一等奖加分", "remark": "传感器方向专业认可较强"},
+    {"id": "hit-2024-29", "sort": 29, "name": "全国大学生光电设计竞赛", "aliases": ["光电设计"], "level": "国家", "bonusType": "special_as_first", "extraBonus": false, "bonusNote": "特等奖和一等奖均按一等奖加分", "remark": "光电方向核心赛事"},
+    {"id": "hit-2024-30", "sort": 30, "name": "全国大学生化工设计竞赛", "aliases": ["化工设计"], "level": "国家", "bonusType": "lower_grade_no_third", "extraBonus": false, "bonusNote": "特、一、二等奖降等加分，三等奖不加分", "remark": "化工方向核心赛事，分值降等"},
+    {"id": "hit-2024-31", "sort": 31, "name": "全国大学生化学实验创新设计大赛", "aliases": ["化学实验创新"], "level": "国家", "bonusType": "lower_grade", "extraBonus": false, "bonusNote": "特、一、二等奖降等加分", "remark": "化学实验方向认可强"},
+    {"id": "hit-2024-32", "sort": 32, "name": "中国大学生物理学术竞赛", "aliases": ["物理学术", "CUPT"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "物理学术展示与辩论属性强"},
+    {"id": "hit-2024-33", "sort": 33, "name": "全国大学生物理实验竞赛", "aliases": ["物理实验竞赛"], "level": "国家", "bonusType": "lower_grade_no_third", "extraBonus": false, "bonusNote": "一、二等奖降等加分，三等奖不加分", "remark": "物理实验方向认可强，分值降等"},
+    {"id": "hit-2024-34", "sort": 34, "name": "全国大学生数学竞赛", "aliases": ["数学竞赛"], "level": "国家", "bonusType": "final_only", "extraBonus": false, "bonusNote": "决赛获奖加分", "remark": "数学基础能力证明强，通常只认决赛"},
+    {"id": "math-modeling", "sort": 35, "name": "全国大学生数学建模竞赛", "aliases": ["数模", "国赛数模"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "数学建模类最核心国内赛事"},
+    {"id": "hit-2024-36", "sort": 36, "name": "美国大学生数学建模竞赛", "aliases": ["美赛", "MCM", "ICM"], "level": "国际", "bonusType": "mcm_mapped", "extraBonus": false, "bonusNote": "特等奖按一等奖，提名特等奖按二等奖，一等奖按三等奖", "remark": "国际知名度高，但 HIT 规则对常见等级有折算"},
+    {"id": "hit-2024-37", "sort": 37, "name": "全国大学生统计建模大赛", "aliases": ["统计建模"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "统计/数据方向认可较强"},
+    {"id": "hit-2024-38", "sort": 38, "name": "全国大学生生命科学竞赛（CULSC）科学探究类、创新创业类", "aliases": ["生命科学竞赛", "CULSC"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "生科方向核心赛事"},
+    {"id": "hit-2024-39", "sort": 39, "name": "全国高等院校数智化企业经营沙盘大赛", "aliases": ["数智化沙盘"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "经管数智化实践类，专业匹配时较好"},
+    {"id": "hit-2024-40", "sort": 40, "name": "全国大学生市场调查与分析大赛", "aliases": ["市场调查与分析"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "经管/统计交叉方向认可强"},
+    {"id": "hit-2024-41", "sort": 41, "name": "全国大学生电子商务“创新、创意及创业”挑战赛", "aliases": ["三创赛", "电商三创"], "level": "国家", "bonusType": "lower_grade_no_third", "extraBonus": false, "bonusNote": "特、一、二等奖降等加分，三等奖不加分", "remark": "电商创新创业方向核心赛事，分值降等"},
+    {"id": "hit-2024-42", "sort": 42, "name": "全国大学生物流设计大赛", "aliases": ["物流设计"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "物流/管理工程方向认可稳定"},
+    {"id": "hit-2024-43", "sort": 43, "name": "中国大学生服务外包创新创业大赛", "aliases": ["服务外包", "服创"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "软件服务与产业应用类认可较好"},
+    {"id": "hit-2024-44", "sort": 44, "name": "全国大学生结构设计竞赛", "aliases": ["结构设计"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "土木结构方向核心赛事"},
+    {"id": "hit-2024-45", "sort": 45, "name": "全国大学生建筑类竞赛", "aliases": ["建筑新人赛", "东南中国建筑新人赛"], "level": "国家", "bonusType": "architecture_mapped", "extraBonus": false, "bonusNote": "东南·中国建筑新人赛 Best2 按一等、Best16 按二等、Top100 按三等", "remark": "建筑/规划/风景园林/环境设计方向，赛项多且需核具体名称"},
+    {"id": "hit-2024-46", "sort": 46, "name": "全国大学生广告艺术大赛", "aliases": ["广告艺术大赛", "大广赛"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "设计传播类全国性赛事"},
+    {"id": "hit-2024-47", "sort": 47, "name": "中国大学生计算机设计大赛", "aliases": ["计算机设计大赛"], "level": "国家", "bonusType": "lower_grade_no_third", "extraBonus": false, "bonusNote": "一、二等奖降等加分，三等奖不加分", "remark": "计算机应用与设计类认可稳定，分值降等"},
+    {"id": "hit-2024-48", "sort": 48, "name": "全国大学生混凝土材料设计大赛", "aliases": ["混凝土材料设计"], "level": "国家", "bonusType": "lower_grade_no_third", "extraBonus": false, "bonusNote": "特、一、二等奖降等加分，三等奖不加分", "remark": "土木材料方向专门赛事，分值降等"},
+    {"id": "hit-2024-49", "sort": 49, "name": "全国大学生交通运输科技大赛", "aliases": ["交通运输科技"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "交通运输方向专业认可较强"},
+    {"id": "hit-2024-50", "sort": 50, "name": "国际大学生程序设计竞赛（ICPC）", "aliases": ["ICPC", "ACM"], "level": "国际", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "算法竞赛顶级信号之一"},
+    {"id": "hit-2024-51", "sort": 51, "name": "全国大学生信息安全竞赛", "aliases": ["信息安全竞赛", "CISCN"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "网络安全方向核心赛事"},
+    {"id": "hit-2024-52", "sort": 52, "name": "全国大学生软件创新大赛", "aliases": ["软件创新大赛"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "软件创新方向，外部声量略低于 ICPC/信息安全"},
+    {"id": "hit-2024-53", "sort": 53, "name": "中国高校计算机大赛-移动应用创新赛、网络技术挑战赛、人工智能创意赛", "aliases": ["C4", "移动应用创新赛", "网络技术挑战赛", "人工智能创意赛"], "level": "国家", "bonusType": "track_specific", "extraBonus": false, "bonusNote": "移动应用一、二等奖降等、三等奖不加；网络技术特、一、二等奖降等、三等奖不加", "remark": "C4 系列在计算机方向认可度较强"},
+    {"id": "hit-2024-54", "sort": 54, "name": "中国机器人及人工智能大赛", "aliases": ["机器人及人工智能", "CRAIC"], "level": "国家", "bonusType": "lower_grade_no_third", "extraBonus": false, "bonusNote": "一、二等奖降等加分，三等奖不加分", "remark": "机器人/AI 方向认可强，分值降等"},
+    {"id": "hit-2024-55", "sort": 55, "name": "全国大学生计算机系统能力大赛", "aliases": ["系统能力大赛", "编译系统"], "level": "国家", "bonusType": "special_as_first", "extraBonus": false, "bonusNote": "特等奖和一等奖均按一等奖加分", "remark": "系统能力方向硬核度高"},
+    {"id": "hit-2024-56", "sort": 56, "name": "全球校园人工智能算法精英大赛", "aliases": ["全球校园 AI 算法"], "level": "国际", "bonusType": "lower_grade_no_third", "extraBonus": false, "bonusNote": "一、二等奖降等加分，三等奖不加分", "remark": "AI 算法方向认可较强，分值降等"},
+    {"id": "hit-2024-57", "sort": 57, "name": "全国大学生英语竞赛", "aliases": ["英语竞赛", "NECCS"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值；备注仅限外国语学院", "remark": "适用面较窄"},
+    {"id": "hit-2024-58", "sort": 58, "name": "全国英语口译大赛", "aliases": ["英语口译"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "外语能力方向，专业适用面较窄"},
+    {"id": "hit-2024-59", "sort": 59, "name": "“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛", "aliases": ["外研社国才杯", "外语能力大赛"], "level": "国家", "bonusType": "default", "extraBonus": false, "bonusNote": "默认按学校等级分值", "remark": "外语类全国核心赛事，含英语/多语种赛道"},
+    {"id": "hit-2024-60", "sort": 60, "name": "“外研社·国才杯”全国大学生英语辩论赛", "aliases": ["英语辩论赛", "外研社辩论"], "level": "国家", "bonusType": "special_as_first", "extraBonus": false, "bonusNote": "特等奖和一等奖均按一等奖加分", "remark": "外语辩论类核心赛事"},
+    {"id": "hit-2024-61", "sort": 61, "name": "“21 世纪杯”全国英语演讲比赛", "aliases": ["21 世纪杯", "英语演讲"], "level": "国家", "bonusType": "special_as_first", "extraBonus": false, "bonusNote": "特等奖和一等奖均按一等奖加分", "remark": "英语演讲类老牌赛事"},
+    {"id": "hit-2024-62", "sort": 62, "name": "全国大学生职业规划大赛（学生赛道）", "aliases": ["职业规划大赛"], "level": "国家", "bonusType": "mapped_medal", "extraBonus": false, "bonusNote": "金奖按一等奖，银奖按二等奖，铜奖按三等奖", "remark": "新近纳入，政策导向强，学术/技术属性弱于科技硬赛"},
+    {"id": "hit-2024-63", "sort": 63, "name": "中国大学生方程式系列赛事", "aliases": ["大学生方程式", "FSAE"], "level": "国家", "bonusType": "weihai_supplement", "extraBonus": false, "bonusNote": "加分规则按哈工大（威海）补充说明执行", "remark": "车辆工程强相关，需另核威海补充说明"},
+    {"id": "hit-2024-64", "sort": 64, "name": "全国海洋航行器设计与制作大赛", "aliases": ["海洋航行器"], "level": "国家", "bonusType": "weihai_supplement", "extraBonus": false, "bonusNote": "加分规则按哈工大（威海）补充说明执行", "remark": "海洋工程/威海校区方向强相关，需另核补充说明"}
+  ],
+  "schoolPrograms": [
+    {"id": "annual-project", "sort": 101, "name": "年度项目", "aliases": ["大一年度项目"], "level": "校", "bonusType": "", "extraBonus": false, "bonusNote": "校内培养项目，不在 2024 科技竞赛加分 64 项清单内。", "remark": "组队场景保留", "catalogGroup": "school"},
+    {"id": "innovation-training", "sort": 102, "name": "大创计划", "aliases": ["大创", "大学生创新创业训练计划"], "level": "校", "bonusType": "", "extraBonus": false, "bonusNote": "校内大创计划本身不在 64 项清单；国家级展示对应第 4 项全国大学生创新年会。", "remark": "组队场景保留", "catalogGroup": "school"}
+  ]
+}

@@ -12,12 +12,18 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
+import smtplib
 import sqlite3
+import ssl
+import threading
 import time
 from contextlib import contextmanager
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
+from email.utils import formataddr, parseaddr
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,6 +35,8 @@ ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get("HITEAM_DB_PATH", ROOT / "hiteam.db"))
 HOST = os.environ.get("HITEAM_HOST", "127.0.0.1")
 PORT = int(os.environ.get("HITEAM_PORT", "8787"))
+LOCAL_FRONTEND_URL = "http://127.0.0.1:8765/index.html"
+FRONTEND_URL = os.environ.get("HITEAM_FRONTEND_URL", LOCAL_FRONTEND_URL)
 SESSION_DAYS = 14
 PBKDF2_ROUNDS = int(os.environ.get("HITEAM_PBKDF2_ROUNDS", "240000"))
 MAX_BODY_BYTES = 2 * 1024 * 1024
@@ -38,6 +46,65 @@ ALLOWED_ORIGINS = {
     "http://127.0.0.1:4173",
     "http://localhost:4173",
 }
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+EMAIL_RE = re.compile(r"^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$")
+STUDENT_ID_RE = re.compile(r"^[a-z0-9._%+\-]{3,40}$")
+CHINA_TZ = timezone(timedelta(hours=8))
+OTP_TTL_SECONDS = 10 * 60
+OTP_COOLDOWN_SECONDS = 60
+OTP_EMAIL_HOURLY_LIMIT = 5
+OTP_IP_HOURLY_LIMIT = 12
+OTP_MAX_ATTEMPTS = 5
+OTP_LOCK = threading.Lock()
+OTP_SEND_LOG: dict[str, list[int]] = {}
+AUTH_LOCK = threading.Lock()
+AUTH_FAIL_LOG: dict[str, list[int]] = {}
+LOGIN_ACCOUNT_WINDOW = 15 * 60
+LOGIN_ACCOUNT_LIMIT = int(os.environ.get("HITEAM_LOGIN_ACCOUNT_LIMIT", "8"))
+LOGIN_IP_WINDOW = 3600
+LOGIN_IP_LIMIT = int(os.environ.get("HITEAM_LOGIN_IP_HOURLY_LIMIT", "30"))
+REGISTER_IP_LIMIT = int(os.environ.get("HITEAM_REGISTER_IP_HOURLY_LIMIT", "5"))
+
+
+class RateLimitError(Exception):
+    """Too many verification-code or authentication requests."""
+
+
+def extra_allowed_origins() -> set[str]:
+    raw = os.environ.get("HITEAM_ALLOWED_ORIGINS", "")
+    return {part.strip().rstrip("/") for part in raw.split(",") if part.strip()}
+
+
+def is_loopback_host(host: str) -> bool:
+    return host.split(":")[0].strip().lower() in LOOPBACK_HOSTS
+
+
+def forwarded_public_origin(headers) -> str:
+    host = (headers.get("X-Forwarded-Host") or headers.get("Host") or "").split(",")[0].strip()
+    if not host or is_loopback_host(host):
+        return ""
+    proto = (headers.get("X-Forwarded-Proto") or "http").split(",")[0].strip() or "http"
+    return f"{proto}://{host}".rstrip("/")
+
+
+def origin_is_allowed(headers, origin: str) -> bool:
+    origin = (origin or "").rstrip("/")
+    if not origin:
+        return False
+    if origin in ALLOWED_ORIGINS or origin in extra_allowed_origins():
+        return True
+    public = forwarded_public_origin(headers)
+    return bool(public) and origin == public
+
+
+def frontend_url_for(headers) -> str:
+    configured = os.environ.get("HITEAM_FRONTEND_URL", "").strip()
+    if configured:
+        return configured
+    public = forwarded_public_origin(headers)
+    if public:
+        return f"{public}/index.html"
+    return LOCAL_FRONTEND_URL
 
 DEFAULT_TAGS = [
     "Python",
@@ -56,14 +123,68 @@ DEFAULT_TAGS = [
     "UI 设计",
     "英语答辩",
 ]
-DEFAULT_COMPETITIONS = [
-    ("general-innovation", "中国国际大学生创新大赛", "创新赛", "国家"),
-    ("challenge-cup", "挑战杯", "挑战杯", "国家"),
-    ("robomaster", "RoboMaster 机甲大师赛", "RoboMaster", "国家"),
-    ("math-modeling", "全国大学生数学建模竞赛", "数模", "国家"),
-    ("annual-project", "年度项目", "年度项目", "校"),
-    ("innovation-training", "大创计划", "大创", "校"),
-]
+CATALOG_PATH = Path(__file__).resolve().parent / "catalog_competitions.json"
+PROJECT_CATALOG_PATH = Path(__file__).resolve().parent / "catalog_projects.json"
+PROJECT_LIBRARY_DISCLAIMER = (
+    "项目库里联系指导老师，项目库里的题目只是一个参考，同学们可以跟指导教师共同拟定新的题目，联系的指导教师也可以不是项目库里的老师。"
+)
+
+
+def load_bonus_catalog() -> dict:
+    try:
+        payload = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def load_project_catalog() -> dict:
+    try:
+        payload = json.loads(PROJECT_CATALOG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+BONUS_CATALOG = load_bonus_catalog()
+PROJECT_CATALOG = load_project_catalog()
+
+
+def bonus_guide_payload() -> dict:
+    catalog = BONUS_CATALOG or load_bonus_catalog()
+    scoring = catalog.get("scoring")
+    extra_bonus = catalog.get("extraBonus")
+    specials = catalog.get("challengeSpecials")
+    conclusions = catalog.get("conclusions")
+    return {
+        "source": str(catalog.get("source") or ""),
+        "scope": str(catalog.get("scope") or ""),
+        "conclusions": conclusions if isinstance(conclusions, list) else [],
+        "scoring": scoring if isinstance(scoring, dict) else {},
+        "extraBonus": extra_bonus if isinstance(extra_bonus, dict) else {},
+        "challengeSpecials": specials if isinstance(specials, dict) else {},
+        "uses": str(catalog.get("uses") or ""),
+    }
+
+
+def competition_payload(row: sqlite3.Row) -> dict:
+    aliases = parse_json(row["aliases_json"], [])
+    if not isinstance(aliases, list):
+        aliases = []
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "subtitle": row["subtitle"],
+        "level": row["level"],
+        "aliases": aliases,
+        "bonusType": row["bonus_type"] or "",
+        "extraBonus": bool(row["extra_bonus"]),
+        "bonusNote": row["bonus_note"] or "",
+        "sort": int(row["sort_index"] or 0),
+        "catalogGroup": row["catalog_group"] or "hit_2024",
+        "remark": row["remark"] or "",
+        "active": bool(row["active"]),
+    }
 
 
 def now() -> int:
@@ -162,6 +283,12 @@ def init_db() -> None:
                 level TEXT NOT NULL DEFAULT '国家',
                 aliases_json TEXT NOT NULL DEFAULT '[]',
                 bonus_type TEXT NOT NULL DEFAULT '',
+                prestige TEXT NOT NULL DEFAULT '',
+                bonus_note TEXT NOT NULL DEFAULT '',
+                extra_bonus INTEGER NOT NULL DEFAULT 0,
+                sort_index INTEGER NOT NULL DEFAULT 0,
+                catalog_group TEXT NOT NULL DEFAULT 'hit_2024',
+                remark TEXT NOT NULL DEFAULT '',
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at INTEGER NOT NULL
             );
@@ -170,6 +297,18 @@ def init_db() -> None:
                 id TEXT PRIMARY KEY,
                 requester_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+                created_at INTEGER NOT NULL,
+                reviewed_at INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS catalog_proposals (
+                id TEXT PRIMARY KEY,
+                requester_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                target_id TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL DEFAULT '{}',
                 status TEXT NOT NULL DEFAULT 'pending',
                 reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
                 created_at INTEGER NOT NULL,
@@ -185,6 +324,9 @@ def init_db() -> None:
                 library_year TEXT NOT NULL DEFAULT '',
                 advisor TEXT NOT NULL DEFAULT '',
                 college TEXT NOT NULL DEFAULT '',
+                contact TEXT NOT NULL DEFAULT '',
+                grades TEXT NOT NULL DEFAULT '',
+                reference_only INTEGER NOT NULL DEFAULT 1,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at INTEGER NOT NULL
             );
@@ -211,6 +353,16 @@ def init_db() -> None:
                 updated_at INTEGER NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS otp_challenges (
+                email TEXT PRIMARY KEY COLLATE NOCASE,
+                code_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                sent_at INTEGER NOT NULL,
+                ip TEXT NOT NULL DEFAULT ''
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_recruitments_status ON recruitments(status);
             CREATE INDEX IF NOT EXISTS idx_recruitments_publisher ON recruitments(publisher_id);
@@ -219,15 +371,27 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
             CREATE INDEX IF NOT EXISTS idx_drafts_owner ON drafts(owner_id, updated_at);
+            CREATE INDEX IF NOT EXISTS idx_catalog_proposals_status ON catalog_proposals(status, created_at);
+            CREATE INDEX IF NOT EXISTS idx_otp_challenges_expires_at ON otp_challenges(expires_at);
             """
         )
         ensure_column(connection, "users", "profile_json", "TEXT NOT NULL DEFAULT '{}'")
         ensure_column(connection, "catalog_competitions", "level", "TEXT NOT NULL DEFAULT '国家'")
         ensure_column(connection, "catalog_competitions", "aliases_json", "TEXT NOT NULL DEFAULT '[]'")
         ensure_column(connection, "catalog_competitions", "bonus_type", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(connection, "catalog_competitions", "prestige", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(connection, "catalog_competitions", "bonus_note", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(connection, "catalog_competitions", "extra_bonus", "INTEGER NOT NULL DEFAULT 0")
+        ensure_column(connection, "catalog_competitions", "sort_index", "INTEGER NOT NULL DEFAULT 0")
+        ensure_column(connection, "catalog_competitions", "catalog_group", "TEXT NOT NULL DEFAULT 'hit_2024'")
+        ensure_column(connection, "catalog_competitions", "remark", "TEXT NOT NULL DEFAULT ''")
         ensure_column(connection, "catalog_projects", "program_id", "TEXT NOT NULL DEFAULT 'general_competition'")
         ensure_column(connection, "catalog_projects", "library_year", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(connection, "catalog_projects", "contact", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(connection, "catalog_projects", "grades", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(connection, "catalog_projects", "reference_only", "INTEGER NOT NULL DEFAULT 1")
         connection.execute("DELETE FROM sessions WHERE expires_at < ?", (now(),))
+        connection.execute("DELETE FROM otp_challenges WHERE expires_at < ?", (now(),))
         # The old per-user collaboration workspace was only prototype data.
         connection.execute("DROP TABLE IF EXISTS collaboration_records")
         connection.execute(
@@ -254,14 +418,152 @@ def seed_catalog(connection: sqlite3.Connection) -> None:
             "INSERT OR IGNORE INTO catalog_tags(id, name, created_at) VALUES (?, ?, ?)",
             (f"tag-{index + 1:03d}", name, timestamp),
         )
-    for identifier, name, subtitle, level in DEFAULT_COMPETITIONS:
+    catalog = BONUS_CATALOG or load_bonus_catalog()
+    items = list(catalog.get("competitions") or []) + list(catalog.get("schoolPrograms") or [])
+    for item in items:
+        if isinstance(item, dict):
+            seed_competition(connection, item, timestamp)
+    connection.execute("UPDATE catalog_competitions SET prestige = ''")
+    project_catalog = PROJECT_CATALOG or load_project_catalog()
+    connection.execute(
+        """
+        DELETE FROM catalog_projects
+        WHERE title LIKE '%每位老师可填写%'
+           OR title IN ('项目名', '项目名（每位老师可填写多个项目）')
+           OR advisor IN ('姓名', '科创指导教师信息')
+        """
+    )
+    for item in project_catalog.get("projects") or []:
+        if isinstance(item, dict):
+            seed_project(connection, item, timestamp)
+
+
+def seed_competition(connection: sqlite3.Connection, item: dict, timestamp: int) -> None:
+    identifier = str(item.get("id") or "").strip()
+    name = str(item.get("name") or "").strip()
+    if not identifier or not name:
+        return
+    aliases = item.get("aliases") if isinstance(item.get("aliases"), list) else []
+    aliases = [str(value).strip() for value in aliases if str(value).strip()][:20]
+    subtitle = str(item.get("subtitle") or (aliases[0] if aliases else name))
+    group = str(item.get("catalogGroup") or "hit_2024")
+    payload = (
+        name,
+        subtitle,
+        str(item.get("level") or "国家"),
+        json.dumps(aliases, ensure_ascii=False),
+        str(item.get("bonusType") or ""),
+        "",
+        str(item.get("bonusNote") or ""),
+        1 if item.get("extraBonus") else 0,
+        int(item.get("sort") or 0),
+        group,
+        str(item.get("remark") or ""),
+    )
+    existing = connection.execute(
+        "SELECT id FROM catalog_competitions WHERE name = ? COLLATE NOCASE",
+        (name,),
+    ).fetchone()
+    target_id = existing["id"] if existing else identifier
+    if existing:
         connection.execute(
             """
-            INSERT OR IGNORE INTO catalog_competitions(id, name, subtitle, level, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            UPDATE catalog_competitions
+            SET subtitle = ?, level = ?, aliases_json = ?, bonus_type = ?, prestige = ?,
+                bonus_note = ?, extra_bonus = ?, sort_index = ?, catalog_group = ?, remark = ?,
+                active = 1
+            WHERE id = ?
             """,
-            (identifier, name, subtitle, level, timestamp),
+            payload[1:] + (target_id,),
         )
+        return
+    connection.execute(
+        """
+        INSERT INTO catalog_competitions(
+            id, name, subtitle, level, aliases_json, bonus_type, prestige,
+            bonus_note, extra_bonus, sort_index, catalog_group, remark, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            subtitle = excluded.subtitle,
+            level = excluded.level,
+            aliases_json = excluded.aliases_json,
+            bonus_type = excluded.bonus_type,
+            prestige = excluded.prestige,
+            bonus_note = excluded.bonus_note,
+            extra_bonus = excluded.extra_bonus,
+            sort_index = excluded.sort_index,
+            catalog_group = excluded.catalog_group,
+            remark = excluded.remark,
+            active = 1
+        """,
+        (identifier, *payload, timestamp),
+    )
+
+
+def seed_project(connection: sqlite3.Connection, item: dict, timestamp: int) -> None:
+    identifier = str(item.get("id") or "").strip()
+    title = str(item.get("title") or "").strip()[:200]
+    if not identifier or not title:
+        return
+    program_id = str(item.get("programId") or "innovation_training").strip() or "innovation_training"
+    summary = str(item.get("summary") or "").strip()[:2000]
+    source = str(item.get("source") or "library").strip() or "library"
+    library_year = str(item.get("libraryYear") or "2025参考").strip()
+    advisor = str(item.get("advisor") or "").strip()[:120]
+    college = str(item.get("college") or "").strip()[:120]
+    contact = str(item.get("contact") or "").strip()[:240]
+    grades = str(item.get("grades") or "").strip()[:80]
+    reference_only = 0 if item.get("referenceOnly") is False else 1
+    existing = connection.execute(
+        "SELECT id FROM catalog_projects WHERE title = ? COLLATE NOCASE",
+        (title,),
+    ).fetchone()
+    target_id = existing["id"] if existing else identifier
+    payload = (
+        title,
+        program_id,
+        summary,
+        source,
+        library_year,
+        advisor,
+        college,
+        contact,
+        grades,
+        reference_only,
+    )
+    if existing:
+        connection.execute(
+            """
+            UPDATE catalog_projects
+            SET title = ?, program_id = ?, summary = ?, source = ?, library_year = ?,
+                advisor = ?, college = ?, contact = ?, grades = ?, reference_only = ?, active = 1
+            WHERE id = ?
+            """,
+            payload + (target_id,),
+        )
+        return
+    connection.execute(
+        """
+        INSERT INTO catalog_projects(
+            id, title, program_id, summary, source, library_year, advisor, college,
+            contact, grades, reference_only, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            title = excluded.title,
+            program_id = excluded.program_id,
+            summary = excluded.summary,
+            source = excluded.source,
+            library_year = excluded.library_year,
+            advisor = excluded.advisor,
+            college = excluded.college,
+            contact = excluded.contact,
+            grades = excluded.grades,
+            reference_only = excluded.reference_only,
+            active = 1
+        """,
+        (identifier, *payload, timestamp),
+    )
 
 
 def parse_json(raw: str, fallback: object) -> object:
@@ -270,6 +572,107 @@ def parse_json(raw: str, fallback: object) -> object:
         return value
     except (TypeError, json.JSONDecodeError):
         return fallback
+
+
+def normalize_aliases(raw: object) -> list[str]:
+    if isinstance(raw, list):
+        values = raw
+    else:
+        values = str(raw or "").split(",")
+    return list(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))[:20]
+
+
+def competition_fields_from_payload(payload: dict, existing: sqlite3.Row | None = None) -> dict:
+    existing_aliases = parse_json(existing["aliases_json"], []) if existing else []
+    if not isinstance(existing_aliases, list):
+        existing_aliases = []
+    aliases = normalize_aliases(payload["aliases"]) if "aliases" in payload else existing_aliases
+    extra = payload.get("extraBonus")
+    if extra is None and existing is not None:
+        extra_bonus = int(existing["extra_bonus"] or 0)
+    else:
+        extra_bonus = 1 if extra else 0
+    return {
+        "name": text_value(payload, "name", 160) or (existing["name"] if existing else ""),
+        "subtitle": text_value(payload, "subtitle", 80)
+        or (existing["subtitle"] if existing else "")
+        or text_value(payload, "name", 160),
+        "level": text_value(payload, "level", 40) or (existing["level"] if existing else "国家") or "国家",
+        "aliases": aliases,
+        "bonus_type": text_value(payload, "bonusType", 40)
+        if "bonusType" in payload
+        else (existing["bonus_type"] if existing else ""),
+        "prestige": "",
+        "bonus_note": text_value(payload, "bonusNote", 240)
+        if "bonusNote" in payload
+        else (existing["bonus_note"] if existing else ""),
+        "extra_bonus": extra_bonus,
+        "remark": text_value(payload, "remark", 240)
+        if "remark" in payload
+        else (existing["remark"] if existing else ""),
+        "catalog_group": text_value(payload, "catalogGroup", 40)
+        or (existing["catalog_group"] if existing else "custom")
+        or "custom",
+    }
+
+
+def write_competition_row(
+    connection: sqlite3.Connection,
+    identifier: str,
+    fields: dict,
+    timestamp: int | None = None,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO catalog_competitions(
+            id, name, subtitle, level, aliases_json, bonus_type, prestige,
+            bonus_note, extra_bonus, catalog_group, remark, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            subtitle = excluded.subtitle,
+            level = excluded.level,
+            aliases_json = excluded.aliases_json,
+            bonus_type = excluded.bonus_type,
+            prestige = excluded.prestige,
+            bonus_note = excluded.bonus_note,
+            extra_bonus = excluded.extra_bonus,
+            catalog_group = excluded.catalog_group,
+            remark = excluded.remark,
+            active = 1
+        """,
+        (
+            identifier,
+            fields["name"],
+            fields["subtitle"],
+            fields["level"],
+            json.dumps(fields["aliases"], ensure_ascii=False),
+            fields["bonus_type"],
+            fields["prestige"],
+            fields["bonus_note"],
+            fields["extra_bonus"],
+            fields["catalog_group"],
+            fields["remark"],
+            timestamp or now(),
+        ),
+    )
+
+
+def proposal_payload(row: sqlite3.Row) -> dict:
+    payload = parse_json(row["payload_json"], {})
+    if not isinstance(payload, dict):
+        payload = {}
+    return {
+        "id": row["id"],
+        "kind": row["kind"],
+        "targetId": row["target_id"] or "",
+        "payload": payload,
+        "requester": row["requester_name"] if "requester_name" in row.keys() else "",
+        "requesterId": row["requester_id"],
+        "status": row["status"],
+        "createdAt": iso_time(row["created_at"]),
+        "reviewedAt": iso_time(row["reviewed_at"]),
+    }
 
 
 def public_user(row: sqlite3.Row | None) -> dict | None:
@@ -327,6 +730,49 @@ def profile_for(row: sqlite3.Row, viewer_id: str, reveal_contact: bool = False) 
     return result
 
 
+def directory_user(row: sqlite3.Row) -> dict:
+    profile = parse_json(row["profile_json"], {})
+    if not isinstance(profile, dict):
+        profile = {}
+    return {
+        "id": row["id"],
+        "account": "",
+        "nickname": row["nickname"],
+        "realName": "",
+        "realNameVisibility": "private",
+        "avatar": "",
+        "campus": str(profile.get("campus", "")),
+        "college": str(profile.get("college", "")),
+        "major": "",
+        "grade": "",
+        "gradeCohort": "",
+        "degree": "",
+        "contact": "",
+        "contacts": [],
+        "contactVisibility": "private",
+        "tags": [],
+        "bio": "",
+        "awards": [],
+        "systemRole": row["system_role"] if row["system_role"] != "applicant" else None,
+        "createdAt": iso_time(row["created_at"]),
+    }
+
+
+def related_user_ids(connection: sqlite3.Connection, viewer_id: str) -> set[str]:
+    ids = {viewer_id}
+    for row in connection.execute("SELECT DISTINCT publisher_id FROM recruitments"):
+        ids.add(row["publisher_id"])
+    for row in connection.execute(
+        """
+        SELECT DISTINCT applicant_id FROM applications
+        WHERE recruitment_id IN (SELECT id FROM recruitments WHERE publisher_id = ?)
+        """,
+        (viewer_id,),
+    ):
+        ids.add(row["applicant_id"])
+    return ids
+
+
 def password_hash(password: str, salt_hex: str | None = None) -> tuple[str, str]:
     salt = bytes.fromhex(salt_hex) if salt_hex else secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PBKDF2_ROUNDS)
@@ -336,6 +782,221 @@ def password_hash(password: str, salt_hex: str | None = None) -> tuple[str, str]
 def verify_password(password: str, salt_hex: str, expected_hex: str) -> bool:
     _, actual_hex = password_hash(password, salt_hex)
     return hmac.compare_digest(actual_hex, expected_hex)
+
+
+def email_suffix() -> str:
+    return os.environ.get("HITEAM_EMAIL_SUFFIX", "").strip().lower()
+
+
+def otp_echo_enabled() -> bool:
+    return os.environ.get("HITEAM_OTP_ECHO", "").strip() == "1"
+
+
+def normalize_login_email(raw: str) -> str:
+    email = str(raw or "").strip().lower()
+    if not EMAIL_RE.fullmatch(email) or len(email) > 80:
+        raise ValueError("请输入有效的校园邮箱")
+    suffix = email_suffix()
+    if suffix and not email.endswith(suffix):
+        raise ValueError("请使用哈工大学生邮箱（@stu.hit.edu.cn）")
+    return email
+
+
+def normalize_account(raw: str) -> str:
+    value = str(raw or "").strip().lower()
+    suffix = email_suffix()
+    if suffix:
+        if "@" not in value:
+            if not STUDENT_ID_RE.fullmatch(value):
+                raise ValueError("请输入学号")
+            if not suffix.startswith("@"):
+                suffix = "@" + suffix
+            value = value + suffix
+        return normalize_login_email(value)
+    if EMAIL_RE.fullmatch(value):
+        return value
+    if len(value) < 3:
+        raise ValueError("账号至少需要 3 个字符")
+    return value
+
+
+def china_day_bounds(ts: int | None = None) -> tuple[int, int]:
+    moment = datetime.fromtimestamp(ts if ts is not None else now(), CHINA_TZ)
+    start = datetime(moment.year, moment.month, moment.day, tzinfo=CHINA_TZ)
+    end = start + timedelta(days=1)
+    return int(start.timestamp()), int(end.timestamp())
+
+
+def consume_otp(email: str, code: str) -> tuple[int, str] | None:
+    code = re.sub(r"\D", "", str(code or ""))
+    if len(code) != 6:
+        return HTTPStatus.BAD_REQUEST, "请输入 6 位验证码"
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM otp_challenges WHERE email = ? COLLATE NOCASE", (email,)
+        ).fetchone()
+        if row is None or int(row["expires_at"]) < now():
+            return HTTPStatus.UNAUTHORIZED, "验证码无效或已过期"
+        attempts = int(row["attempts"])
+        if attempts >= OTP_MAX_ATTEMPTS:
+            connection.execute("DELETE FROM otp_challenges WHERE email = ?", (email,))
+            return HTTPStatus.UNAUTHORIZED, "验证码错误次数过多，请重新获取"
+        if not hmac.compare_digest(row["code_hash"], otp_digest(code, row["salt"])):
+            connection.execute(
+                "UPDATE otp_challenges SET attempts = attempts + 1 WHERE email = ?",
+                (email,),
+            )
+            return HTTPStatus.UNAUTHORIZED, "验证码不正确"
+        connection.execute("DELETE FROM otp_challenges WHERE email = ?", (email,))
+    return None
+
+
+def client_ip(handler: BaseHTTPRequestHandler) -> str:
+    forwarded = (handler.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+    if forwarded:
+        return forwarded[:80]
+    real = (handler.headers.get("X-Real-IP") or "").strip()
+    if real:
+        return real[:80]
+    return str(handler.client_address[0] if handler.client_address else "")[:80]
+
+
+def prune_otp_log(key: str, window: int, ts: int) -> list[int]:
+    times = [item for item in OTP_SEND_LOG.get(key, []) if ts - item < window]
+    OTP_SEND_LOG[key] = times
+    return times
+
+
+def prune_auth_log(key: str, window: int, ts: int) -> list[int]:
+    times = [item for item in AUTH_FAIL_LOG.get(key, []) if ts - item < window]
+    AUTH_FAIL_LOG[key] = times
+    return times
+
+
+def enforce_login_rate_limit(account: str, ip: str) -> None:
+    ts = now()
+    with AUTH_LOCK:
+        account_times = prune_auth_log(f"login-account:{account}", LOGIN_ACCOUNT_WINDOW, ts)
+        ip_times = prune_auth_log(f"login-ip:{ip or 'unknown'}", LOGIN_IP_WINDOW, ts)
+        if len(account_times) >= LOGIN_ACCOUNT_LIMIT:
+            raise RateLimitError("登录失败次数过多，请稍后再试")
+        if ip and len(ip_times) >= LOGIN_IP_LIMIT:
+            raise RateLimitError("登录请求过于频繁，请稍后再试")
+
+
+def record_login_failure(account: str, ip: str) -> None:
+    ts = now()
+    with AUTH_LOCK:
+        account_times = prune_auth_log(f"login-account:{account}", LOGIN_ACCOUNT_WINDOW, ts)
+        ip_times = prune_auth_log(f"login-ip:{ip or 'unknown'}", LOGIN_IP_WINDOW, ts)
+        account_times.append(ts)
+        ip_times.append(ts)
+        AUTH_FAIL_LOG[f"login-account:{account}"] = account_times
+        AUTH_FAIL_LOG[f"login-ip:{ip or 'unknown'}"] = ip_times
+
+
+def clear_login_failures(account: str) -> None:
+    with AUTH_LOCK:
+        AUTH_FAIL_LOG.pop(f"login-account:{account}", None)
+
+
+def enforce_register_rate_limit(ip: str) -> None:
+    ts = now()
+    with AUTH_LOCK:
+        ip_times = prune_auth_log(f"register-ip:{ip or 'unknown'}", 3600, ts)
+        if ip and len(ip_times) >= REGISTER_IP_LIMIT:
+            raise RateLimitError("注册请求过于频繁，请稍后再试")
+        if ip:
+            ip_times.append(ts)
+            AUTH_FAIL_LOG[f"register-ip:{ip or 'unknown'}"] = ip_times
+
+
+def enforce_otp_rate_limit(email: str, ip: str) -> None:
+    ts = now()
+    with OTP_LOCK:
+        email_times = prune_otp_log(f"email:{email}", 3600, ts)
+        ip_times = prune_otp_log(f"ip:{ip or 'unknown'}", 3600, ts)
+        if email_times and ts - email_times[-1] < OTP_COOLDOWN_SECONDS:
+            raise RateLimitError("验证码已发送，请稍后再试")
+        if len(email_times) >= OTP_EMAIL_HOURLY_LIMIT:
+            raise RateLimitError("该邮箱验证码次数过多，请一小时后再试")
+        if ip and len(ip_times) >= OTP_IP_HOURLY_LIMIT:
+            raise RateLimitError("验证码请求过于频繁，请稍后再试")
+        email_times.append(ts)
+        ip_times.append(ts)
+        OTP_SEND_LOG[f"email:{email}"] = email_times
+        OTP_SEND_LOG[f"ip:{ip or 'unknown'}"] = ip_times
+
+
+def otp_digest(code: str, salt_hex: str) -> str:
+    return hashlib.sha256(bytes.fromhex(salt_hex) + code.encode("ascii")).hexdigest()
+
+
+def smtp_config() -> dict[str, str | int]:
+    return {
+        "host": os.environ.get("HITEAM_SMTP_HOST", "smtp-relay.brevo.com").strip(),
+        "port": int(os.environ.get("HITEAM_SMTP_PORT", "587") or "587"),
+        "user": os.environ.get("HITEAM_SMTP_USER", "").strip(),
+        "password": os.environ.get("HITEAM_SMTP_KEY", "").strip(),
+        "from_header": os.environ.get("HITEAM_SMTP_FROM", "HiTeam <tribbie@mail.hiteam.xyz>").strip(),
+    }
+
+
+def send_mail(to_email: str, subject: str, body: str) -> None:
+    cfg = smtp_config()
+    if not cfg["user"] or not cfg["password"]:
+        raise RuntimeError("邮件服务未配置")
+    from_name, from_addr = parseaddr(str(cfg["from_header"]))
+    if not from_addr:
+        from_addr = str(cfg["from_header"])
+        from_name = "HiTeam"
+    message = EmailMessage()
+    message["From"] = formataddr((from_name or "HiTeam", from_addr))
+    message["To"] = to_email
+    message["Subject"] = subject
+    message.set_content(body)
+    context = ssl.create_default_context()
+    with smtplib.SMTP(str(cfg["host"]), int(cfg["port"]), timeout=20) as smtp:
+        smtp.ehlo()
+        smtp.starttls(context=context)
+        smtp.login(str(cfg["user"]), str(cfg["password"]))
+        smtp.send_message(message)
+
+
+def send_otp_email(to_email: str, code: str) -> None:
+    send_mail(
+        to_email,
+        "【HiTeam】注册验证码",
+        (
+            f"你的 HiTeam 注册验证码是 {code}，{OTP_TTL_SECONDS // 60} 分钟内有效。\n\n"
+            "如果不是你本人在注册，请忽略这封邮件。\n"
+        ),
+    )
+
+
+def find_or_create_user_by_account(account: str) -> sqlite3.Row:
+    nickname = account.split("@", 1)[0] or account
+    created = now()
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM users WHERE account = ? COLLATE NOCASE", (account,)
+        ).fetchone()
+        if row is not None:
+            return row
+        existing_count = connection.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"]
+        initial_role = "creator" if existing_count == 0 else "applicant"
+        user_id = safe_id("u")
+        salt, digest = password_hash(secrets.token_urlsafe(32))
+        connection.execute(
+            """
+            INSERT INTO users(
+                id, account, password_hash, password_salt, nickname,
+                system_role, profile_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)
+            """,
+            (user_id, account, digest, salt, nickname, initial_role, created, created),
+        )
+        return connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
 
 def token_hash(token: str) -> str:
@@ -489,6 +1150,7 @@ def payload_recruitment(row: sqlite3.Row, connection: sqlite3.Connection, viewer
     item["publisherId"] = row["publisher_id"]
     item["status"] = row["status"]
     item["current"] = row["current_count"]
+    item["createdAt"] = iso_time(row["created_at"])
     item.setdefault("applications", [])
     if row["status"] == "open" and deadline_expired(item.get("deadline", "")):
         item["status"] = "expired"
@@ -555,19 +1217,17 @@ def workspace_payload(viewer: sqlite3.Row) -> dict:
             for row in connection.execute("SELECT * FROM catalog_tags WHERE active = 1 ORDER BY name")
         ]
         competitions = [
-            {
-                "id": row["id"],
-                "name": row["name"],
-                "subtitle": row["subtitle"],
-                "level": row["level"],
-                "aliases": parse_json(row["aliases_json"], []) if isinstance(parse_json(row["aliases_json"], []), list) else [],
-                "bonusType": row["bonus_type"],
-                "active": bool(row["active"]),
-            }
+            competition_payload(row)
             for row in connection.execute(
-                "SELECT * FROM catalog_competitions WHERE active = 1 ORDER BY name"
+                """
+                SELECT * FROM catalog_competitions
+                WHERE active = 1
+                ORDER BY CASE catalog_group WHEN 'hit_2024' THEN 0 WHEN 'school' THEN 1 ELSE 2 END,
+                         sort_index ASC, name ASC
+                """
             )
         ]
+        project_catalog = PROJECT_CATALOG or load_project_catalog()
         projects = [
             {
                 "id": row["id"],
@@ -578,9 +1238,12 @@ def workspace_payload(viewer: sqlite3.Row) -> dict:
                 "libraryYear": row["library_year"],
                 "advisor": row["advisor"],
                 "college": row["college"],
+                "contact": row["contact"] if "contact" in row.keys() else "",
+                "grades": row["grades"] if "grades" in row.keys() else "",
+                "referenceOnly": bool(row["reference_only"]) if "reference_only" in row.keys() else True,
                 "active": bool(row["active"]),
             }
-            for row in connection.execute("SELECT * FROM catalog_projects WHERE active = 1 ORDER BY title")
+            for row in connection.execute("SELECT * FROM catalog_projects WHERE active = 1 ORDER BY college, title")
         ]
         links = [
             {"projectId": row["project_id"], "competitionId": row["competition_id"]}
@@ -607,17 +1270,36 @@ def workspace_payload(viewer: sqlite3.Row) -> dict:
             """,
             (viewer_id, viewer["system_role"]),
         ).fetchall()
+        proposal_rows = connection.execute(
+            """
+            SELECT catalog_proposals.*, users.nickname AS requester_name
+            FROM catalog_proposals
+            JOIN users ON users.id = catalog_proposals.requester_id
+            WHERE catalog_proposals.requester_id = ? OR ? IN ('admin', 'creator')
+            ORDER BY catalog_proposals.created_at DESC
+            """,
+            (viewer_id, viewer["system_role"]),
+        ).fetchall()
         draft_rows = connection.execute(
             "SELECT * FROM drafts WHERE owner_id = ? ORDER BY updated_at DESC",
             (viewer_id,),
         ).fetchall()
+        related_ids = related_user_ids(connection, viewer_id)
+        visible_users = []
+        for row in user_rows:
+            if row["id"] in related_ids:
+                visible_users.append(profile_for(row, viewer_id))
+            elif viewer["system_role"] == "creator":
+                visible_users.append(directory_user(row))
         return {
             "version": "5.0-match-completion",
             "serverUpdatedAt": now(),
-            "users": [profile_for(row, viewer_id) for row in user_rows],
+            "users": visible_users,
             "tags": tags,
             "competitions": competitions,
+            "bonusGuide": bonus_guide_payload(),
             "projects": projects,
+            "projectLibraryNote": str(project_catalog.get("disclaimer") or PROJECT_LIBRARY_DISCLAIMER),
             "projectCompetitionLinks": links,
             "recruitments": [
                 payload_recruitment(row, connection, viewer_id) for row in recruitment_rows
@@ -665,6 +1347,7 @@ def workspace_payload(viewer: sqlite3.Row) -> dict:
                 }
                 for row in request_rows
             ],
+            "catalogProposals": [proposal_payload(row) for row in proposal_rows],
             "profile": profile_for(viewer, viewer_id, reveal_contact=True),
         }
 
@@ -678,8 +1361,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def end_headers(self) -> None:
         origin = self.headers.get("Origin", "")
-        if origin in ALLOWED_ORIGINS:
-            self.send_header("Access-Control-Allow-Origin", origin)
+        if origin_is_allowed(self.headers, origin):
+            self.send_header("Access-Control-Allow-Origin", origin.rstrip("/"))
             self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Vary", "Origin")
         super().end_headers()
@@ -706,6 +1389,35 @@ class Handler(BaseHTTPRequestHandler):
 
     def error(self, status: int, message: str) -> None:
         self.send_json(status, {"ok": False, "error": message})
+
+    def send_html(self, status: int, html: str, location: str = "") -> None:
+        body = html.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        if location:
+            self.send_header("Location", location)
+        self.end_headers()
+        self.wfile.write(body)
+        self.close_connection = True
+
+    def redirect_to_frontend(self) -> None:
+        target = frontend_url_for(self.headers)
+        self.send_html(
+            HTTPStatus.FOUND,
+            (
+                "<!doctype html><meta charset='utf-8'>"
+                f"<meta http-equiv='refresh' content='0;url={target}'>"
+                "<title>HiTeam</title>"
+                "<p>这是 HiTeam 接口服务，页面在 "
+                f"<a href='{target}'>{target}</a>。"
+                "竞赛名册见 "
+                f"<a href='{target}#bonus'>{target}#bonus</a>。</p>"
+            ),
+            location=target,
+        )
 
     def session_cookie(self, token: str, clear: bool = False) -> str:
         max_age = 0 if clear else SESSION_DAYS * 86400
@@ -734,6 +1446,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if path in {"", "/", "/index.html"}:
+            self.redirect_to_frontend()
+            return
         if path == "/api/health":
             self.send_json(HTTPStatus.OK, {"ok": True, "service": "hiteam-backend"})
             return
@@ -757,8 +1472,17 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/auth/login":
                 self.login()
                 return
+            if path == "/api/auth/otp/send":
+                self.send_otp()
+                return
+            if path == "/api/auth/otp/verify":
+                self.verify_otp()
+                return
             if path == "/api/auth/logout":
                 self.logout()
+                return
+            if path == "/api/admin/users":
+                self.provision_user()
                 return
             if path == "/api/profile":
                 self.update_profile()
@@ -774,6 +1498,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/catalog/tag-requests":
                 self.create_tag_request()
+                return
+            if path == "/api/catalog/proposals":
+                self.create_catalog_proposal()
                 return
             if path == "/api/catalog/competitions":
                 self.create_competition()
@@ -791,6 +1518,10 @@ class Handler(BaseHTTPRequestHandler):
             self.error(HTTPStatus.NOT_FOUND, "接口不存在")
         except ValueError as exc:
             self.error(HTTPStatus.BAD_REQUEST, str(exc))
+        except RateLimitError as exc:
+            self.error(HTTPStatus.TOO_MANY_REQUESTS, str(exc))
+        except RuntimeError as exc:
+            self.error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
         except sqlite3.IntegrityError:
             self.error(HTTPStatus.CONFLICT, "数据已存在或状态已变化")
         except Exception as exc:  # pragma: no cover
@@ -827,6 +1558,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_PATCH(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         try:
+            if path == "/api/auth/password":
+                self.change_password()
+                return
             application_id = self.path_id("/api/applications/")
             if application_id:
                 self.review_application(application_id)
@@ -842,6 +1576,10 @@ class Handler(BaseHTTPRequestHandler):
             tag_request_id = self.path_id("/api/catalog/tag-requests/")
             if tag_request_id:
                 self.review_tag_request(tag_request_id)
+                return
+            proposal_id = self.path_id("/api/catalog/proposals/")
+            if proposal_id:
+                self.review_catalog_proposal(proposal_id)
                 return
             competition_id = self.path_id("/api/catalog/competitions/")
             if competition_id:
@@ -945,28 +1683,81 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             return
         payload = json_body(self)
-        name = text_value(payload, "name", 160)
-        subtitle = text_value(payload, "subtitle", 80)
-        level = text_value(payload, "level", 40) or "国家"
-        aliases = payload.get("aliases", [])
-        if not isinstance(aliases, list):
-            aliases = [item.strip() for item in str(aliases).split(",") if item.strip()]
-        aliases = list(dict.fromkeys(str(item).strip() for item in aliases if str(item).strip()))[:20]
-        bonus_type = text_value(payload, "bonusType", 40)
-        if not name:
+        fields = competition_fields_from_payload(payload)
+        if not fields["name"]:
             raise ValueError("竞赛名称不能为空")
         identifier = safe_id("competition")
         with get_connection() as connection:
+            write_competition_row(connection, identifier, fields)
+            self.write_audit(connection, user["id"], "create_competition", identifier, fields["name"])
+        self.send_json(HTTPStatus.CREATED, {"ok": True, "id": identifier})
+
+    def create_catalog_proposal(self) -> None:
+        user = self.require_user()
+        if not user:
+            return
+        payload = json_body(self)
+        kind = str(payload.get("kind") or "").strip()
+        if kind not in {"competition_add", "competition_patch"}:
+            raise ValueError("提案类型不正确")
+        target_id = text_value(payload, "targetId", 80)
+        body = payload.get("payload")
+        if not isinstance(body, dict):
+            body = payload
+        fields = competition_fields_from_payload(body)
+        note = text_value(payload, "note", 2000) or text_value(body, "note", 2000)
+        if kind == "competition_add" and not fields["name"]:
+            raise ValueError("竞赛名称不能为空")
+        with get_connection() as connection:
+            existing = None
+            if kind == "competition_patch":
+                if not target_id:
+                    raise ValueError("请选择要修正的竞赛")
+                existing = connection.execute(
+                    "SELECT * FROM catalog_competitions WHERE id = ?",
+                    (target_id,),
+                ).fetchone()
+                if existing is None:
+                    raise ValueError("要修正的竞赛不存在")
+                fields = competition_fields_from_payload(body, existing)
+            stored = {
+                "name": fields["name"],
+                "subtitle": fields["subtitle"],
+                "level": fields["level"],
+                "aliases": fields["aliases"],
+                "bonusType": fields["bonus_type"],
+                "bonusNote": fields["bonus_note"],
+                "extraBonus": bool(fields["extra_bonus"]),
+                "remark": fields["remark"],
+                "note": note,
+            }
+            pending = connection.execute(
+                """
+                SELECT id FROM catalog_proposals
+                WHERE requester_id = ? AND kind = ? AND target_id = ? AND status = 'pending'
+                """,
+                (user["id"], kind, target_id),
+            ).fetchone()
+            if pending:
+                self.send_json(HTTPStatus.OK, {"ok": True, "status": "pending", "id": pending["id"]})
+                return
+            identifier = safe_id("catalog-proposal")
             connection.execute(
                 """
-                INSERT INTO catalog_competitions(
-                    id, name, subtitle, level, aliases_json, bonus_type, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO catalog_proposals(
+                    id, requester_id, kind, target_id, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (identifier, name, subtitle, level, json.dumps(aliases, ensure_ascii=False), bonus_type, now()),
+                (
+                    identifier,
+                    user["id"],
+                    kind,
+                    target_id,
+                    json.dumps(stored, ensure_ascii=False),
+                    now(),
+                ),
             )
-            self.write_audit(connection, user["id"], "create_competition", identifier, name)
-        self.send_json(HTTPStatus.CREATED, {"ok": True, "id": identifier})
+        self.send_json(HTTPStatus.CREATED, {"ok": True, "status": "pending", "id": identifier})
 
     def create_project(self) -> None:
         user = self.require_admin()
@@ -988,8 +1779,8 @@ class Handler(BaseHTTPRequestHandler):
                 """
                 INSERT INTO catalog_projects(
                     id, title, program_id, summary, source, library_year,
-                    advisor, college, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    advisor, college, contact, grades, reference_only, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     identifier,
@@ -1000,6 +1791,9 @@ class Handler(BaseHTTPRequestHandler):
                     library_year,
                     advisor,
                     college,
+                    "",
+                    "",
+                    1 if source == "library" else 0,
                     now(),
                 ),
             )
@@ -1024,7 +1818,7 @@ class Handler(BaseHTTPRequestHandler):
             if existing is None:
                 self.error(HTTPStatus.NOT_FOUND, "目录项不存在")
                 return
-            if kind == "competitions" and ("aliases" in payload or "bonusType" in payload or "mergeInto" in payload):
+            if kind == "competitions":
                 merge_into = text_value(payload, "mergeInto", 120)
                 if merge_into:
                     target = connection.execute(
@@ -1047,18 +1841,53 @@ class Handler(BaseHTTPRequestHandler):
                     self.write_audit(connection, user["id"], "merge_competition", identifier, target["id"])
                     self.send_json(HTTPStatus.OK, {"ok": True, "mergedInto": target["id"]})
                     return
-                aliases = payload.get("aliases", parse_json(existing["aliases_json"], []))
-                if not isinstance(aliases, list):
-                    aliases = [item.strip() for item in str(aliases).split(",") if item.strip()]
-                aliases = list(dict.fromkeys(str(item).strip() for item in aliases if str(item).strip()))[:20]
-                bonus_type = text_value(payload, "bonusType", existing["bonus_type"])
+                fields = competition_fields_from_payload(payload, existing)
+                if not fields["name"]:
+                    raise ValueError("竞赛名称不能为空")
                 connection.execute(
                     """
                     UPDATE catalog_competitions
-                    SET active = ?, aliases_json = ?, bonus_type = ?
+                    SET name = ?, subtitle = ?, level = ?, aliases_json = ?, bonus_type = ?,
+                        prestige = ?, bonus_note = ?, extra_bonus = ?, remark = ?, active = ?
                     WHERE id = ?
                     """,
-                    (1 if active else 0, json.dumps(aliases, ensure_ascii=False), bonus_type, identifier),
+                    (
+                        fields["name"],
+                        fields["subtitle"],
+                        fields["level"],
+                        json.dumps(fields["aliases"], ensure_ascii=False),
+                        fields["bonus_type"],
+                        fields["prestige"],
+                        fields["bonus_note"],
+                        fields["extra_bonus"],
+                        fields["remark"],
+                        1 if active else 0,
+                        identifier,
+                    ),
+                )
+            elif kind == "projects":
+                title = text_value(payload, "title", 200) or existing["title"]
+                summary = text_value(payload, "summary", 2000) if "summary" in payload else existing["summary"]
+                college = text_value(payload, "college", 120) if "college" in payload else existing["college"]
+                advisor = text_value(payload, "advisor", 120) if "advisor" in payload else existing["advisor"]
+                library_year = (
+                    text_value(payload, "libraryYear", 80)
+                    if "libraryYear" in payload
+                    else existing["library_year"]
+                )
+                connection.execute(
+                    """
+                    UPDATE catalog_projects
+                    SET title = ?, summary = ?, college = ?, advisor = ?, library_year = ?, active = ?
+                    WHERE id = ?
+                    """,
+                    (title, summary, college, advisor, library_year, 1 if active else 0, identifier),
+                )
+            elif kind == "tags":
+                name = text_value(payload, "name", 80) or existing["name"]
+                connection.execute(
+                    "UPDATE catalog_tags SET name = ?, active = ? WHERE id = ?",
+                    (name, 1 if active else 0, identifier),
                 )
             else:
                 connection.execute(
@@ -1071,6 +1900,78 @@ class Handler(BaseHTTPRequestHandler):
                 identifier,
             )
         self.send_json(HTTPStatus.OK, {"ok": True})
+
+    def review_catalog_proposal(self, identifier: str) -> None:
+        user = self.require_admin()
+        if not user:
+            return
+        payload = json_body(self)
+        status = str(payload.get("status", "")).strip()
+        if status not in {"approved", "rejected"}:
+            raise ValueError("提案审核状态不正确")
+        with get_connection() as connection:
+            request = connection.execute(
+                "SELECT * FROM catalog_proposals WHERE id = ?", (identifier,)
+            ).fetchone()
+            if request is None:
+                self.error(HTTPStatus.NOT_FOUND, "竞赛提案不存在")
+                return
+            if request["status"] != "pending":
+                self.error(HTTPStatus.CONFLICT, "竞赛提案已处理")
+                return
+            body = parse_json(request["payload_json"], {})
+            if not isinstance(body, dict):
+                body = {}
+            if status == "approved":
+                if request["kind"] == "competition_add":
+                    fields = competition_fields_from_payload(body)
+                    if not fields["name"]:
+                        raise ValueError("竞赛名称不能为空")
+                    write_competition_row(connection, safe_id("competition"), fields)
+                elif request["kind"] == "competition_patch":
+                    existing = connection.execute(
+                        "SELECT * FROM catalog_competitions WHERE id = ?",
+                        (request["target_id"],),
+                    ).fetchone()
+                    if existing is None:
+                        raise ValueError("要修正的竞赛不存在")
+                    fields = competition_fields_from_payload(body, existing)
+                    connection.execute(
+                        """
+                        UPDATE catalog_competitions
+                        SET name = ?, subtitle = ?, level = ?, aliases_json = ?, bonus_type = ?,
+                            prestige = ?, bonus_note = ?, extra_bonus = ?, remark = ?, active = 1
+                        WHERE id = ?
+                        """,
+                        (
+                            fields["name"],
+                            fields["subtitle"],
+                            fields["level"],
+                            json.dumps(fields["aliases"], ensure_ascii=False),
+                            fields["bonus_type"],
+                            fields["prestige"],
+                            fields["bonus_note"],
+                            fields["extra_bonus"],
+                            fields["remark"],
+                            existing["id"],
+                        ),
+                    )
+            connection.execute(
+                """
+                UPDATE catalog_proposals
+                SET status = ?, reviewed_by = ?, reviewed_at = ?
+                WHERE id = ?
+                """,
+                (status, user["id"], now(), identifier),
+            )
+            self.write_audit(
+                connection,
+                user["id"],
+                f"{status}_catalog_proposal",
+                identifier,
+                request["kind"],
+            )
+        self.send_json(HTTPStatus.OK, {"ok": True, "status": status})
 
     def review_tag_request(self, identifier: str) -> None:
         user = self.require_admin()
@@ -1187,13 +2088,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def register(self) -> None:
         payload = json_body(self)
-        account = text_value(payload, "account", 80)
+        account = normalize_account(text_value(payload, "account", 80) or text_value(payload, "email", 80))
         password = text_value(payload, "password", 200)
-        nickname = text_value(payload, "nickname", 80) or account
-        if len(account) < 3:
-            raise ValueError("账号至少需要 3 个字符")
+        nickname = text_value(payload, "nickname", 80) or account.split("@", 1)[0]
         if len(password) < 8:
             raise ValueError("密码至少需要 8 个字符")
+        enforce_register_rate_limit(client_ip(self))
+        with get_connection() as connection:
+            existing = connection.execute(
+                "SELECT id FROM users WHERE account = ? COLLATE NOCASE", (account,)
+            ).fetchone()
+        if existing:
+            self.error(HTTPStatus.CONFLICT, "该学号已注册，请直接登录")
+            return
+        if email_suffix():
+            failed = consume_otp(account, text_value(payload, "code", 12))
+            if failed:
+                self.error(failed[0], failed[1])
+                return
         salt, digest = password_hash(password)
         user_id = safe_id("u")
         created = now()
@@ -1219,17 +2131,130 @@ class Handler(BaseHTTPRequestHandler):
 
     def login(self) -> None:
         payload = json_body(self)
-        account = text_value(payload, "account", 80)
+        account = normalize_account(text_value(payload, "account", 80) or text_value(payload, "email", 80))
         password = text_value(payload, "password", 200)
+        ip = client_ip(self)
+        enforce_login_rate_limit(account, ip)
         with get_connection() as connection:
             row = connection.execute(
                 "SELECT * FROM users WHERE account = ? COLLATE NOCASE", (account,)
             ).fetchone()
         if row is None or not verify_password(password, row["password_salt"], row["password_hash"]):
+            record_login_failure(account, ip)
             self.error(HTTPStatus.UNAUTHORIZED, "账号或密码错误")
             return
+        clear_login_failures(account)
         token = create_session(row["id"])
         self.send_json(HTTPStatus.OK, {"ok": True, "user": public_user(row)}, self.session_cookie(token))
+
+    def send_otp(self) -> None:
+        payload = json_body(self)
+        email = normalize_account(text_value(payload, "email", 80) or text_value(payload, "account", 80))
+        ip = client_ip(self)
+        enforce_otp_rate_limit(email, ip)
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        salt = secrets.token_bytes(16).hex()
+        created = now()
+        if smtp_config()["password"]:
+            try:
+                send_otp_email(email, code)
+            except Exception as exc:
+                print(f"otp email failed: {type(exc).__name__}")
+                raise RuntimeError("验证码暂时发不出去，请稍后重试") from exc
+        elif not otp_echo_enabled():
+            raise RuntimeError("邮件服务未配置")
+        with get_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO otp_challenges(email, code_hash, salt, expires_at, attempts, sent_at, ip)
+                VALUES (?, ?, ?, ?, 0, ?, ?)
+                ON CONFLICT(email) DO UPDATE SET
+                    code_hash = excluded.code_hash,
+                    salt = excluded.salt,
+                    expires_at = excluded.expires_at,
+                    attempts = 0,
+                    sent_at = excluded.sent_at,
+                    ip = excluded.ip
+                """,
+                (email, otp_digest(code, salt), salt, created + OTP_TTL_SECONDS, created, ip),
+            )
+        response = {"ok": True, "sent": True, "expiresIn": OTP_TTL_SECONDS}
+        if otp_echo_enabled():
+            response["debugCode"] = code
+        self.send_json(HTTPStatus.OK, response)
+
+    def verify_otp(self) -> None:
+        payload = json_body(self)
+        email = normalize_account(text_value(payload, "email", 80) or text_value(payload, "account", 80))
+        failed = consume_otp(email, text_value(payload, "code", 12))
+        if failed:
+            self.error(failed[0], failed[1])
+            return
+        self.send_json(HTTPStatus.OK, {"ok": True, "verified": True})
+
+    def change_password(self) -> None:
+        user = self.require_user()
+        if not user:
+            return
+        payload = json_body(self)
+        old_password = text_value(payload, "oldPassword", 200)
+        new_password = text_value(payload, "newPassword", 200)
+        if not verify_password(old_password, user["password_salt"], user["password_hash"]):
+            self.error(HTTPStatus.UNAUTHORIZED, "旧密码不正确")
+            return
+        if len(new_password) < 8:
+            raise ValueError("密码至少需要 8 个字符")
+        salt, digest = password_hash(new_password)
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE users SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?",
+                (digest, salt, now(), user["id"]),
+            )
+        self.send_json(HTTPStatus.OK, {"ok": True})
+
+    def provision_user(self) -> None:
+        actor = self.require_creator()
+        if not actor:
+            return
+        payload = json_body(self)
+        account = normalize_account(text_value(payload, "account", 80) or text_value(payload, "email", 80))
+        password = text_value(payload, "password", 200)
+        nickname = text_value(payload, "nickname", 80) or account.split("@", 1)[0]
+        if len(password) < 8:
+            raise ValueError("密码至少需要 8 个字符")
+        salt, digest = password_hash(password)
+        created = now()
+        created_new = False
+        with get_connection() as connection:
+            existing = connection.execute(
+                "SELECT * FROM users WHERE account = ? COLLATE NOCASE", (account,)
+            ).fetchone()
+            if existing:
+                if existing["system_role"] == "creator":
+                    self.error(HTTPStatus.FORBIDDEN, "不能重置创建者密码")
+                    return
+                connection.execute(
+                    "UPDATE users SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?",
+                    (digest, salt, created, existing["id"]),
+                )
+                row = connection.execute("SELECT * FROM users WHERE id = ?", (existing["id"],)).fetchone()
+            else:
+                created_new = True
+                user_id = safe_id("u")
+                connection.execute(
+                    """
+                    INSERT INTO users(
+                        id, account, password_hash, password_salt, nickname,
+                        system_role, profile_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'applicant', '{}', ?, ?)
+                    """,
+                    (user_id, account, digest, salt, nickname, created, created),
+                )
+                row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if created_new:
+            self.send_json(HTTPStatus.CREATED, {"ok": True, "created": True, "user": public_user(row)})
+        else:
+            self.send_json(HTTPStatus.OK, {"ok": True, "created": False, "user": public_user(row)})
 
     def logout(self) -> None:
         morsel = SimpleCookie(self.headers.get("Cookie", "")).get("hiteam_session")
@@ -1314,10 +2339,19 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             return
         payload = json_body(self)
-        required = ("programId", "projectTitle", "competition", "campus", "summary", "requirement")
-        for key in required:
-            if not text_value(payload, key, 500):
+        field_limits = {
+            "programId": 60,
+            "projectTitle": 200,
+            "competition": 200,
+            "campus": 80,
+            "summary": 2000,
+            "requirement": 2000,
+        }
+        for key, maximum in field_limits.items():
+            if not text_value(payload, key, maximum):
                 raise ValueError(f"缺少 {key}")
+        if "projectSummary" in payload:
+            text_value(payload, "projectSummary", 2000)
         total = int(payload.get("total", 0))
         current = int(payload.get("current", 0))
         if total < 0 or total > 1000 or current < 0 or current > total:
@@ -1332,7 +2366,18 @@ class Handler(BaseHTTPRequestHandler):
         stored["publisherId"] = user["id"]
         stored["status"] = "open"
         stored["current"] = current
+        day_start, day_end = china_day_bounds(created)
         with get_connection() as connection:
+            published_today = connection.execute(
+                """
+                SELECT COUNT(*) AS count FROM recruitments
+                WHERE publisher_id = ? AND created_at >= ? AND created_at < ?
+                """,
+                (user["id"], day_start, day_end),
+            ).fetchone()["count"]
+            if published_today:
+                self.error(HTTPStatus.CONFLICT, "今天已经发布过招募")
+                return
             connection.execute(
                 """
                 INSERT INTO recruitments(

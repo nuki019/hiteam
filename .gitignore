@@ -14,6 +14,8 @@ Thumbs.db
 # Local runtime output
 *.log
 share-site/.env
+secrets.env
+*.smtp.key
 
 # Backend runtime state
 hiteam.db
